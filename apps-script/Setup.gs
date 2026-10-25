@@ -372,11 +372,16 @@ function installSchedule() {
   Schedule.install();
   var s = Schedule.summary(), today = MarketCal.ymd();
   var next = MarketCal.isTradingDay(today) && MarketCal.minutes() < 16 * 60 ? today : MarketCal.nextTradingDay(today);
+  var meta = History.meta();
   Ui.alert('Daily schedule is on',
     'Next trading day: ' + Fmt.day(next) + '.\n\n' +
-    '• 08:50 pre-market check on Telegram\n• Market snapshots every ' + Config.get('heartbeatMinutes') + ' minutes in the session\n• After 16:00 closing summary on Telegram and email\n\n' +
+    '• 08:50 pre-market check and market regime on Telegram\n' +
+    '• 09:21–' + Config.get('noEntriesAfter') + ' intraday scan after every 5-minute bar; signals on Telegram and in the Alerts sheet\n' +
+    '• ' + Config.get('squareOffAt') + ' square-off reminder when intraday alerts went out\n' +
+    '• After 16:00 price history update, swing / medium / long scans, closing summary on Telegram and email\n\n' +
     (s.tickRunning ? 'The engine is already running for today.' : 'It starts by itself on the next trading morning.') +
-    (listsMissing ? '\n\nNote: the Nifty stock lists are not loaded yet. Phase 1 only needs the indices and your watchlist, but run 4. Load stock lists before Phase 2.' : ''));
+    (listsMissing ? '\n\nNote: the Nifty stock lists are not loaded yet. Run 4. Load stock lists.' : '') +
+    (!meta || !meta.symbols ? '\n\nNote: price history is not loaded yet, so there will be no signals. Run 6. Load price history.' : ''));
 }
 
 function removeSchedule() {
