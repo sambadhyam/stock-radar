@@ -1030,27 +1030,30 @@ var SymbolsDb = {
 
     if (needSearch.length && Angel.configured()) {
       var jwt = Angel.login(false);
-      var batch = 8; // Angel One allows 10 searches a second
-      for (var i = 0; i < needSearch.length; i += batch) {
-        if (Date.now() - t0 > 200000) { report.tokensMissing = report.tokensMissing.concat(needSearch.slice(i)); break; } // stay well inside the 6-minute limit
-        var group = needSearch.slice(i, i + batch);
+      var queue = needSearch.slice(), tries = {}, batch = 4, rounds = 0; // gentle: Angel One rejects bursts
+      while (queue.length) {
+        if (Date.now() - t0 > 200000) { report.tokensMissing = report.tokensMissing.concat(queue); break; } // stay inside the 6-minute limit
+        var group = queue.splice(0, batch);
         var reqs = group.map(function (sym) {
           return { url: Angel.BASE + Angel.ROUTES.search, method: 'post', contentType: 'application/json', headers: Angel.headers(jwt), payload: JSON.stringify({ exchange: 'NSE', searchscrip: sym }), muteHttpExceptions: true };
         });
         var resps = [];
         try { resps = UrlFetchApp.fetchAll(reqs); } catch (e) { resps = []; }
         group.forEach(function (sym, k) {
-          var hit = null;
-          try {
-            var j = JSON.parse(resps[k].getContentText());
-            var list = (j && j.status && j.data) || [];
-            hit = list.filter(function (r) { return r.tradingsymbol === sym + '-EQ'; })[0] || list.filter(function (r) { return r.tradingsymbol === sym + '-BE'; })[0] || null;
-          } catch (e) { hit = null; }
-          if (hit) { all[sym].angelToken = String(hit.symboltoken); all[sym].angelSymbol = hit.tradingsymbol; }
-          else report.tokensMissing.push(sym);
+          var j = null;
+          try { j = JSON.parse(resps[k].getContentText()); } catch (e) { j = null; }
+          if (j && j.status === true) {
+            var list = j.data || [];
+            var hit = list.filter(function (r) { return r.tradingsymbol === sym + '-EQ'; })[0] || list.filter(function (r) { return r.tradingsymbol === sym + '-BE'; })[0];
+            if (hit) { all[sym].angelToken = String(hit.symboltoken); all[sym].angelSymbol = hit.tradingsymbol; }
+            else report.tokensMissing.push(sym); // Angel One really has no such NSE stock
+          } else {
+            tries[sym] = (tries[sym] || 0) + 1; // rate limit or a hiccup: try again later
+            if (tries[sym] < 4) queue.push(sym); else report.tokensMissing.push(sym);
+          }
         });
-        if ((i / batch) % 10 === 9) save(); // save progress now and then
-        Utilities.sleep(1000);
+        if (++rounds % 15 === 0) save(); // save progress now and then
+        Utilities.sleep(1100);
       }
     } else if (needSearch.length) {
       report.tokensMissing = needSearch;
