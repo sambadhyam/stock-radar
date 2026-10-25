@@ -18,6 +18,7 @@ function onOpen() {
     .addItem('6. Load price history', 'loadHistory')
     .addSeparator()
     .addItem('Status', 'showStatus')
+    .addItem('Update paper results now', 'updatePaperResults')
     .addItem('Send a test Telegram message', 'testTelegram')
     .addItem('Stop daily schedule', 'removeSchedule')
     .addToUi();
@@ -31,10 +32,11 @@ function sheetSchemas_() {
   { name: 'Config', headers: ['key', 'value', 'description'], widths: [200, 170, 520], textCols: [2] },
   { name: 'Holidays', headers: ['date', 'holiday'], widths: [120, 320], textCols: [1] },
   { name: 'Symbols', headers: SYMBOL_HEADERS, widths: [130, 240, 70, 100, 140, 170, 120, 200, 80, 80, 80, 150], textCols: [4] },
-  { name: 'Alerts', headers: ['id', 'createdAt', 'symbol', 'horizon', 'strategy', 'strategyStatus', 'direction', 'entryLow', 'entryHigh', 'stop', 'target1', 'target2', 'rr', 'confidence', 'reasons', 'regime', 'source', 'validTill', 'status', 'triggeredAt', 'closedAt', 'outcome', 'outcomePct', 'netPct', 'notes'] },
-  { name: 'PaperTrades', headers: ['id', 'alertId', 'symbol', 'horizon', 'strategy', 'status', 'entryAt', 'entryPrice', 'qty', 'stop', 'target', 'exitAt', 'exitPrice', 'exitReason', 'grossPnl', 'charges', 'netPnl', 'netPct', 'holdingDays'] },
-  { name: 'Strategies', headers: ['id', 'name', 'horizon', 'enabled', 'status', 'override', 'trades', 'wins', 'losses', 'flats', 'winRatePct', 'avgNetPct', 'profitFactor', 'maxDrawdownPct', 'alphaPct', 'updatedAt', 'statusSince'] },
-  { name: 'Checkpoints', headers: ['alertId', 'symbol', 'label', 'dueDate', 'price', 'returnPct', 'niftyReturnPct', 'alphaPct', 'evaluatedAt'] },
+  { name: 'Alerts', headers: ['id', 'createdAt', 'symbol', 'horizon', 'strategy', 'strategyStatus', 'direction', 'entryLow', 'entryHigh', 'stop', 'target1', 'target2', 'rr', 'confidence', 'reasons', 'regime', 'source', 'validTill', 'status', 'triggeredAt', 'closedAt', 'outcome', 'outcomePct', 'netPct', 'notes'].concat(AlertBook.EXTRA_HEADERS) },
+  { name: 'PaperTrades', headers: ['id', 'alertId', 'symbol', 'horizon', 'strategy', 'status', 'entryAt', 'entryPrice', 'qty', 'stop', 'target', 'exitAt', 'exitPrice', 'exitReason', 'grossPnl', 'charges', 'netPnl', 'netPct', 'holdingDays'].concat(Review.PAPER_EXTRA) },
+  { name: 'Strategies', headers: ['id', 'name', 'horizon', 'enabled', 'status', 'override', 'trades', 'wins', 'losses', 'flats', 'winRatePct', 'avgNetPct', 'profitFactor', 'maxDrawdownPct', 'alphaPct', 'updatedAt', 'statusSince'].concat(Review.STRAT_EXTRA) },
+  { name: 'Checkpoints', headers: ['alertId', 'symbol', 'label', 'dueDate', 'price', 'returnPct', 'niftyReturnPct', 'alphaPct', 'evaluatedAt'].concat(Review.CHECK_EXTRA) },
+  { name: 'Metrics', headers: Review.METRIC_HEADERS },
   { name: 'Holdings', headers: ['symbol', 'qty', 'avgPrice', 'lastPrice', 'sector', 'importedAt'] },
   { name: 'Fundamentals', headers: ['symbol', 'roePct', 'rocePct', 'debtToEquity', 'sales3yPct', 'profit3yPct', 'promoterPct', 'pledgePct', 'pe', 'pe5yMedian', 'fcf', 'source', 'updatedAt'] },
   { name: 'Backtests', headers: ['runId', 'strategy', 'horizon', 'from', 'to', 'symbols', 'trades', 'winRatePct', 'avgNetPct', 'profitFactor', 'maxDrawdownPct', 'cagrPct', 'createdAt'] },
@@ -429,6 +431,13 @@ var Setup = {
     return m.symbols + ' stocks and indices, up to ' + (m.last ? Fmt.day(History.dayToYmd(m.last)) : '—');
   },
 
+  paperLine: function () {
+    var s = null;
+    try { s = JSON.parse(Secrets.props().getProperty('PAPER_SUMMARY') || 'null'); } catch (e) { s = null; }
+    if (!s) return 'No results yet (the first are judged after the next close)';
+    return s.closed + ' closed, net ' + Fmt.money(s.netPnl, 0) + ' (' + Fmt.pct(s.returnPct) + '), ' + s.open + ' open' + (s.start ? ', since ' + Fmt.day(s.start) : '');
+  },
+
   regimeLine: function () {
     var r = Market.saved();
     return r ? SRCore.regimeName(r.state) + (r.asOfDay ? ' (as of ' + Fmt.day(History.dayToYmd(r.asOfDay)) + ')' : '') : 'Not worked out yet';
@@ -508,6 +517,7 @@ var Setup = {
       li('Price history', Setup.historyLine()) +
       li('Market regime', Setup.regimeLine()) +
       li('Strategies on', String(StrategyBook.enabled(['INTRADAY', 'SWING', 'MEDIUM', 'LONG']).length) + ' of ' + SRCore.STRATEGIES.length) +
+      li('Paper trading', Setup.paperLine()) +
       li('Emails left today', String(MailApp.getRemainingDailyQuota())) +
       li('App token (for Phase 4)', 'Saved, shown when the app is connected') +
       '</table><h3>Last runs</h3><table>' + (jobRows || li('No runs yet', 'They appear after the schedule starts')) + '</table></body></html>';

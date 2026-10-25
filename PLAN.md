@@ -4,7 +4,7 @@ Personal NSE analysis, alerts and self-checking paper trading. Phone-only workfl
 
 - **App:** https://sambadhyam.github.io/stock-radar/
 - **Repo:** `sambadhyam/stock-radar`
-- **Status:** Phase 2 complete (strategies, scans, alerts). The app still shows sample data until Phase 4.
+- **Status:** Phase 3 complete (evaluator, paper trading, graduation, reports). The app still shows sample data until Phase 4.
 
 ---
 
@@ -58,6 +58,16 @@ Nothing in this system can place an order. Under SEBI's retail-algo rules, API o
 7. **Keys entry.** Keys are typed into a form opened from the sheet's Stock Radar menu and go straight into Script Properties, so they never sit in the code, the sheet or its version history. A manual fallback function exists for when the form can't open.
 8. **Security.** The Web App runs as the owner and requires the secret token on every call. Keys live only in Script Properties and are masked out of every log and message. The Angel One account holds no money. Portfolio data never goes into the public repo. Permissions are declared in `appsscript.json` and kept narrow: this spreadsheet only (`spreadsheets.currentonly`), Drive files the script created (`drive.file`, through the Drive web API because `DriveApp` would force full Drive access), dialogs, external requests, triggers, mail to the owner and the owner's email address.
 9. **English only.** Malayalam support was dropped at the owner's request in Phase 1.
+10. **Evaluation (Phase 3).** The rules live in core.js (`simulateTrade`, `tradeResult`, `metrics`, `graduate`) so the Phase 5 backtester matches the live record exactly.
+    - **Entry** fills like a limit order: the first candle after the alert that trades into the entry range or better (at the open if it opens inside or better, else at the range edge). Opening beyond the stop first means NOT_TRIGGERED.
+    - **Exit:** a gap through the stop or target exits at the open; a candle touching both counts as the stop; in the entry candle the target counts only for an open fill; still open at expiry means EXPIRED at the last close.
+    - **Candles used:** intraday alerts on 1-minute candles from the first full minute after the alert to 15:15; others on daily candles from the day after the alert.
+    - **Paper trades:** sized from `paperCapital` and `riskPct`, independently of each other (no cash limit), so each strategy's record is fair. Net of Zerodha charges, intraday MIS or delivery rates.
+    - **Alpha:** Nifty 50 is measured over the same holding period (1-minute for intraday, close before entry to the exit-day close otherwise).
+    - **Graduation**, judged on the latest 60 closed main trades (`graduationWindowTrades`), weekly on Saturday: LIVE_READY with ≥ 30 trades, average net > 0, profit factor ≥ 1.3, drawdown ≤ 15% and average alpha > 0. REJECTED when average net < 0 after ≥ 30 trades; it keeps paper-trading silently and can recover. Each change is a Telegram message, and the override column always decides the label.
+    - **Shadow track:** signals blocked only by the regime are logged with `track = shadow`, judged the same way, and compared in the weekly "regime filter check". They never count towards graduation or the paper account.
+    - **Checkpoints:** medium and long buys get 1, 3, 6 and 12-month checkpoints plus a FINAL row, each against Nifty 50.
+    - **Exit warnings** (holding guard) are judged after 20 trading days: right if the price fell.
 
 ---
 
@@ -85,17 +95,19 @@ Other working assumptions: Muhurat trading is treated as a closed day for the en
 | Minute ticks (snapshots, bookkeeping) | ~430 | ≤ 2 s | ~10 |
 | Intraday 5-minute scans (09:21–14:31) | 63 | ~25 s | ~26 |
 | Pre-market login, regime, brief (08:50) | 1 | ≤ 30 s | 0.5 |
-| EOD history update + scans + summary (16:00) | 1–3 chained | ≤ 4 min | ~5 |
+| EOD history update + evaluation + scans + summary (16:00) | 2–4 chained | ≤ 4 min | ~7 |
 | Weekly report (Saturday) | 1 | ≤ 60 s | 1 |
-| **Total** | | | **~43 of 90** |
+| **Total** | | | **~45 of 90** |
 
-URL fetches: about 4,500 on a normal day (63 scans × up to 60 candle requests, plus about 520 at the close) against the 20,000 limit. The one-time history load (about 520 requests) takes one menu run plus one or two automatic follow-ups.
+URL fetches: about 4,600 on a normal day (63 scans × up to 60 candle requests, about 520 daily candles at the close, and one 1-minute request per stock with an intraday alert) against the 20,000 limit. The one-time history load (about 520 requests) takes one menu run plus one or two automatic follow-ups.
 
 ---
 
 ## 6. Sheet tabs (created by `setupSheets()`)
 
-`Config`, `Holidays`, `Symbols`, `Alerts`, `PaperTrades`, `Strategies`, `Checkpoints`, `Holdings`, `Fundamentals`, `Backtests`, `Reports`, `HealthLog`, `ErrorLog`, `Checks`.
+`Config`, `Holidays`, `Symbols`, `Alerts`, `PaperTrades`, `Strategies`, `Checkpoints`, `Holdings`, `Fundamentals`, `Backtests`, `Reports`, `HealthLog`, `ErrorLog`, `Checks`, `Metrics`.
+
+Alerts is the source of truth: each row carries its evaluation (status OPEN / ACTIVE / CLOSED, outcome, fill and exit, paper quantity, gross and net P&L, charges, Nifty move, alpha, holding time). PaperTrades is rebuilt from it after every close. Metrics holds strategy × track × regime numbers ("Insufficient data" below 30 trades).
 
 Config also holds every strategy parameter (keys like `orb.volMult`), copied from `SRCore.PARAMS` in core.js. Strategies has one row per strategy (enabled, status, override).
 
@@ -156,6 +168,7 @@ stock-radar/
 │   ├── Engine.gs            schedule, daily tick (pre-market, snapshots, closing summary), job runner and failure alerts
 │   ├── Api.gs               Telegram and email (Web App API added in Phase 4)
 │   ├── Signals.gs           Drive price history, regime, intraday and end-of-day scans, Alerts log and messages
+│   ├── Review.gs            evaluator, paper trades, checkpoints, metrics, graduation, weekly and readiness reports
 │   └── Core.gs              identical copy of core/core.js
 ├── tools/gas-sim/           Node simulator of Apps Script services + tests for apps-script/ and core.js (run: node tools/gas-sim/tests.mjs)
 │                            scenarios.mjs holds the synthetic price series each strategy is tested on
@@ -181,7 +194,7 @@ stock-radar/
 |---|---|---|
 | 0 | Plan, verified facts, file tree, UI design preview | ✅ Done |
 | 1 | `setupSheets()`, providers, TOTP login, Telegram, scheduler, health log, test functions | ✅ Done (23 simulator tests) |
-| 2 | `core.js` indicators and strategies, intraday engine, EOD scans, alert logging, price history backfill | ✅ Done (59 simulator tests) |
-| 3 | Evaluator, metrics, auto paper trading, graduation, daily, weekly and readiness reports | Next |
-| 4 | Web App API, PWA wired to live data, settings synced to the engine | |
+| 2 | `core.js` indicators and strategies, intraday engine, EOD scans, alert logging, price history backfill | ✅ Done |
+| 3 | Evaluator, metrics, auto paper trading, graduation, daily, weekly and readiness reports | ✅ Done (74 simulator tests) |
+| 4 | Web App API, PWA wired to live data, settings synced to the engine | Next |
 | 5 | Backtester and Backtest Baseline report, portfolio import, optional AI summaries | |

@@ -169,6 +169,108 @@ export function coreTests({ test, eq, ok, root }) {
     ok(C.confidence(70, { trades: 6, winRatePct: 20, profitFactor: 0.5 }) < 70, 'a poor record lowers it');
   });
 
+  test('core: a signal blocked only by the regime comes back as a shadow signal', () => {
+    const k = S.daily['base-breakout']();
+    const r = C.scanDaily('TEST', k, { regime: bear, strategies: ['base-breakout'] });
+    eq(r.signals.length, 0); eq(r.shadow.length, 1, 'shadow');
+    ok(r.shadow[0].shadow === true && r.shadow[0].symbol === 'TEST' && r.shadow[0].rr >= 2, JSON.stringify(r.shadow[0]));
+    const bars = S.intraday.orb();
+    const ri = C.scanIntraday('TCS', bars, { regime: bear, strategies: ['orb'], prevClose: 100, tradedValueCr: 500, nowMs: bars[bars.length - 1].t + 360000, lastEntryMinute: 870 });
+    eq(ri.signals.length, 0); eq(ri.shadow.length, 1, 'intraday buy in a Bear regime is tracked silently');
+    eq(C.scanDaily('TEST', k, { regime: { state: 'UNKNOWN' }, strategies: ['base-breakout'] }).shadow.length, 0, 'no shadows without a known regime');
+    eq(C.scanDaily('TEST', k, { regime: bear, strategies: ['base-breakout'], params: C.params({ minRROther: 9 }) }).shadow.length, 0, 'other checks still apply');
+  });
+
+  // Daily-style candles for the trade simulator: t is a running day number, barMs 0.
+  const day = (i, o, h, l, c) => ({ t: i * 86400000, o, h, l, c, v: 1000 });
+  const buyA = { direction: 'BUY', entryLow: 100, entryHigh: 101, stop: 98, target: 104 };
+  const shortA = { direction: 'SHORT', entryLow: 99, entryHigh: 100, stop: 102, target: 96 };
+  const sim = (a, candles, extra) => C.simulateTrade(a, candles, { expiryMs: 10 * 86400000, nowMs: 20 * 86400000, barMs: 0, ...extra });
+
+  test('core: a paper trade fills like a limit order and exits at the target', () => {
+    const r = sim(buyA, [day(1, 100.5, 101.5, 100, 101), day(2, 101, 104.5, 100.6, 104)]);
+    eq(r.state, 'CLOSED'); eq(r.outcome, 'TARGET_HIT'); eq(r.fillPrice, 100.5, 'filled at the open inside the range'); eq(r.exitPrice, 104);
+    near(r.pct, (104 / 100.5 - 1) * 100, 0.001, 'gross move'); eq(r.bars, 1);
+    const lim = sim(buyA, [day(1, 103, 105, 100.8, 102)], { nowMs: 5 * 86400000 });
+    eq(lim.fillPrice, 101, 'opened above the range, filled at its top'); eq(lim.state, 'ACTIVE', 'target in the fill candle does not count after a limit fill');
+    const better = sim(buyA, [day(1, 99, 99.5, 98.5, 99.2)], { nowMs: 5 * 86400000 });
+    eq(better.fillPrice, 99, 'a lower open fills at the open');
+  });
+
+  test('core: the stop wins when one candle touches both, and gaps exit at the open', () => {
+    eq(sim(buyA, [day(1, 100.5, 101, 100.2, 100.8), day(2, 100.8, 105, 97.5, 103)]).outcome, 'STOP_HIT', 'both in one candle: stop first');
+    const g = sim(buyA, [day(1, 100.5, 101, 100.2, 100.8), day(2, 96, 97, 95, 96.5)]);
+    eq(g.outcome, 'STOP_HIT'); eq(g.exitPrice, 96, 'gap through the stop exits at the open');
+    const up = sim(buyA, [day(1, 100.5, 101, 100.2, 100.8), day(2, 106, 107, 105, 106.5)]);
+    eq(up.outcome, 'TARGET_HIT'); eq(up.exitPrice, 106, 'gap over the target exits at the open');
+    const same = sim(buyA, [day(1, 100.5, 101, 97, 98.5)]);
+    eq(same.outcome, 'STOP_HIT', 'stop in the entry candle');
+  });
+
+  test('core: not triggered, expired and still open', () => {
+    const failed = sim(buyA, [day(1, 97, 99, 96, 98)]);
+    eq(failed.outcome, 'NOT_TRIGGERED'); ok(/beyond the stop/.test(failed.note), failed.note);
+    const never = sim(buyA, [day(1, 103, 104, 102, 103), day(2, 103, 103.5, 101.5, 102)]);
+    eq(never.outcome, 'NOT_TRIGGERED'); ok(/never came/.test(never.note));
+    eq(sim(buyA, [day(1, 103, 104, 102, 103)], { nowMs: 5 * 86400000 }).state, 'OPEN', 'still waiting before expiry');
+    const exp = sim(buyA, [day(1, 100.5, 101, 100.2, 100.8), day(10, 101, 102, 100.5, 101.6), day(11, 101, 110, 90, 105)]);
+    eq(exp.outcome, 'EXPIRED'); eq(exp.exitPrice, 101.6, 'closed at the last close inside the window; later candles ignored');
+    const act = sim(buyA, [day(1, 100.5, 101, 100.2, 100.8), day(2, 100.8, 102, 100.5, 101.9)], { nowMs: 3 * 86400000 });
+    eq(act.state, 'ACTIVE'); near(act.pct, (101.9 / 100.5 - 1) * 100, 0.001, 'marked to the last close');
+  });
+
+  test('core: short trades mirror the rules', () => {
+    const r = sim(shortA, [day(1, 99.5, 100, 98.5, 99), day(2, 99, 99.2, 95.5, 96)]);
+    eq(r.outcome, 'TARGET_HIT'); eq(r.fillPrice, 99.5); eq(r.exitPrice, 96); near(r.pct, (99.5 - 96) / 99.5 * 100, 0.001, 'short gain');
+    eq(sim(shortA, [day(1, 99.5, 100, 98.5, 99), day(2, 99, 102.5, 95.5, 100)]).outcome, 'STOP_HIT', 'both in one candle');
+    eq(sim(shortA, [day(1, 103, 104, 102.5, 103)]).outcome, 'NOT_TRIGGERED', 'opened above the stop');
+  });
+
+  test('core: intraday minute bars stop at the expiry minute', () => {
+    const t0 = Date.parse('2026-10-26T15:10:00+05:30');
+    const mins = [0, 1, 2, 3, 4, 5].map((i) => ({ t: t0 + i * 60000, o: 100.5, h: 100.9, l: 100.3, c: 100.6 + i / 100, v: 10 }));
+    const r = C.simulateTrade(buyA, mins, { expiryMs: Date.parse('2026-10-26T15:15:00+05:30'), nowMs: Date.parse('2026-10-26T16:00:00+05:30'), barMs: 60000 });
+    eq(r.outcome, 'EXPIRED'); eq(r.exitPrice, 100.64, 'close of the 15:14 bar'); eq(r.exitT, t0 + 4 * 60000);
+  });
+
+  test('core: net results after Zerodha charges', () => {
+    const d = C.tradeResult('BUY', 100, 500, 510, false, {});
+    const ch = C.charges(50000, 51000, false, {}).total;
+    eq(d.grossPnl, 1000); eq(d.charges, ch); eq(d.netPnl, Math.round((1000 - ch) * 100) / 100); near(d.netPct, (1000 - ch) / 50000 * 100, 0.001, 'net %');
+    const sh = C.tradeResult('SHORT', 10, 200, 190, true, {});
+    eq(sh.grossPnl, 100); eq(sh.charges, C.charges(1900, 2000, true, {}).total, 'bought back at 190, sold at 200');
+    eq(C.tradeResult('BUY', 0, 500, 510, false, {}).netPct, null, 'no quantity, no result');
+  });
+
+  test('core: strategy metrics — win rate, expectancy, profit factor, drawdown, alpha', () => {
+    const tr = [
+      { netPct: 2, netPnl: 2000, exitT: 1, holdDays: 3, alphaPct: 1.5 },
+      { netPct: -1, netPnl: -1000, exitT: 2, holdDays: 2, alphaPct: -0.5 },
+      { netPct: -1, netPnl: -1000, exitT: 3, holdDays: 4, alphaPct: -1 },
+      { netPct: 3, netPnl: 3000, exitT: 4, holdDays: 5, alphaPct: 2 },
+    ];
+    const m = C.metrics(tr, { capital: 100000 });
+    eq(m.trades, 4); eq(m.wins, 2); eq(m.losses, 2); eq(m.winRatePct, 50); eq(m.avgWinPct, 2.5); eq(m.avgLossPct, -1);
+    eq(m.expectancyPct, 0.75); eq(m.profitFactor, 2.5); eq(m.avgHoldDays, 3.5); eq(m.avgAlphaPct, 0.5); eq(m.totalNetPnl, 3000); eq(m.returnPct, 3);
+    near(m.maxDrawdownPct, 2000 / 102000 * 100, 0.01, 'peak 1,02,000 to 1,00,000');
+    eq(C.metrics([{ netPct: 1, netPnl: 100, exitT: 1 }], {}).profitFactor, null, 'no losses yet');
+    eq(C.metrics([{ netPct: 10, exitT: 1 }, { netPct: -10, exitT: 2 }], { capital: 100 }).returnPct, -1, 'percent results compound when rupees are unknown');
+  });
+
+  test('core: graduation to Live-ready or Rejected needs 30 trades and every condition', () => {
+    const rules = { minTrades: 30, minPF: 1.3, maxDrawdownPct: 15 };
+    const good = { trades: 32, wins: 20, losses: 12, winRatePct: 62.5, expectancyPct: 0.8, profitFactor: 1.9, maxDrawdownPct: 6, avgAlphaPct: 0.4 };
+    eq(C.graduate({ ...good, trades: 29 }, rules).status, 'PAPER'); ok(/29 of 30/.test(C.graduate({ ...good, trades: 29 }, rules).reason));
+    const live = C.graduate(good, rules);
+    eq(live.status, 'LIVE_READY'); ok(/62.5% win over 32 trades/.test(live.reason), live.reason);
+    eq(C.graduate({ ...good, expectancyPct: -0.2 }, rules).status, 'REJECTED');
+    const pf = C.graduate({ ...good, profitFactor: 1.1 }, rules);
+    eq(pf.status, 'PAPER'); ok(/profit factor 1.1/.test(pf.reason), pf.reason);
+    eq(C.graduate({ ...good, maxDrawdownPct: 22 }, rules).status, 'PAPER', 'drawdown limit');
+    eq(C.graduate({ ...good, avgAlphaPct: -0.1 }, rules).status, 'PAPER', 'must beat Nifty');
+    eq(C.graduate({ ...good, profitFactor: null, losses: 0, wins: 32 }, rules).status, 'LIVE_READY', 'no losses at all');
+  });
+
   test('core: position size and Zerodha charges', () => {
     const p = C.positionSize(100000, 1, 500, 490, 100);
     eq(p.qty, 100); eq(p.riskAmount, 1000); eq(p.capped, false);

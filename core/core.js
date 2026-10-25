@@ -6,7 +6,9 @@
  * Keep this file byte-identical to apps-script/Core.gs. No import/export, no DOM, no Apps Script services.
  *
  * Contents: helpers, indicators, market regime, relative strength, the strategies,
- * the checks every signal must pass, confidence, position size and Zerodha charges.
+ * the checks every signal must pass, confidence, position size, Zerodha charges,
+ * and the evaluation maths: following a trade through later candles, its net result,
+ * strategy metrics and the Live-ready / Rejected decision.
  *
  * Candles are objects {t, o, h, l, c, v} sorted oldest first; t is milliseconds.
  * Directions: BUY, SHORT (intraday only) and EXIT (for holdings).
@@ -14,7 +16,7 @@
 var SRCore = (function () {
   'use strict';
 
-  var VERSION = '0.3.0';
+  var VERSION = '0.4.0';
   var OPEN_MIN = 555;   // 09:15 IST in minutes after midnight
   var CLOSE_MIN = 930;  // 15:30 IST
   var ALL_REGIMES = ['BULL', 'NEUTRAL', 'BEAR', 'HIGH_VOL'];
@@ -736,12 +738,14 @@ var SRCore = (function () {
 
   /**
    * Round levels to the tick, work out reward-to-risk and apply the checks every signal must pass.
-   * Returns {signal} or {rejected: 'reason'}.
+   * Returns {signal}, or {rejected: 'reason'}. A signal that passes everything except the market regime
+   * also comes back as {rejected, shadow: signal}, so it can be paper-tracked silently to test the regime filter.
    */
   function finalize(raw, st, P, o) {
     var dir = raw.direction, isExit = dir === 'EXIT', regimeState = (o.regime && o.regime.state) || 'UNKNOWN';
     var allowed = (st.regimes && st.regimes[dir]) || [];
-    if (allowed.indexOf(regimeState) < 0) return { rejected: 'regime ' + regimeName(regimeState) + ' does not allow ' + dir };
+    var regimeOk = allowed.indexOf(regimeState) >= 0;
+    var regimeWhy = 'regime ' + regimeName(regimeState) + ' does not allow ' + dir;
     var sig = {
       strategy: st.id, strategyName: st.name, horizon: st.horizon, direction: dir,
       entry: tickRound(raw.entry), entryLow: tickRound(Math.min(raw.entryLow, raw.entryHigh), 'down'), entryHigh: tickRound(Math.max(raw.entryLow, raw.entryHigh), 'up'),
@@ -749,7 +753,7 @@ var SRCore = (function () {
       ruleScore: Math.round(clamp(raw.score || 50, 0, 100)), reasons: raw.reasons || [], extra: raw.extra || null,
       tradedValueCr: num(o.tradedValueCr) ? round(o.tradedValueCr, 1) : null,
     };
-    if (isExit) { sig.confidence = sig.ruleScore; return { signal: sig }; }
+    if (isExit) { sig.confidence = sig.ruleScore; return regimeOk ? { signal: sig } : { rejected: regimeWhy }; }
     var buy = dir === 'BUY';
     sig.stop = tickRound(raw.stop, buy ? 'down' : 'up');
     if (raw.targetR) {
@@ -775,6 +779,7 @@ var SRCore = (function () {
     if (!num(o.tradedValueCr)) return { rejected: 'no volume history for the liquidity check' };
     if (o.tradedValueCr < P.minTradedValueCr) return { rejected: 'average traded value ₹' + round(o.tradedValueCr, 1) + ' crore is below ₹' + P.minTradedValueCr + ' crore' };
     sig.confidence = confidence(sig.ruleScore, o.track);
+    if (!regimeOk) return regimeState === 'UNKNOWN' ? { rejected: regimeWhy } : { rejected: regimeWhy, shadow: sig };
     return { signal: sig };
   }
 
@@ -806,7 +811,7 @@ var SRCore = (function () {
    */
   function scanDaily(symbol, candles, opts) {
     opts = opts || {};
-    var P = opts.params || params(), out = { signals: [], rejected: [] };
+    var P = opts.params || params(), out = { signals: [], shadow: [], rejected: [] };
     if (!candles || candles.length < 30) return out;
     var x = new Daily(candles), i = x.n - 1;
     var tv = x.tradedValueCr(i, 20);
@@ -819,6 +824,7 @@ var SRCore = (function () {
       var f = finalize(raw, st, P, { regime: opts.regime, tradedValueCr: tv, track: opts.tracks && opts.tracks[st.id] });
       if (f.signal) { f.signal.symbol = symbol; f.signal.barTime = candles[i].t; out.signals.push(f.signal); }
       else out.rejected.push({ strategy: st.id, why: f.rejected });
+      if (f.shadow) { f.shadow.symbol = symbol; f.shadow.barTime = candles[i].t; f.shadow.shadow = true; out.shadow.push(f.shadow); }
     });
     return out;
   }
@@ -829,7 +835,7 @@ var SRCore = (function () {
    */
   function scanIntraday(symbol, bars, opts) {
     opts = opts || {};
-    var P = opts.params || params(), out = { signals: [], rejected: [] };
+    var P = opts.params || params(), out = { signals: [], shadow: [], rejected: [] };
     if (!bars || bars.length < 25) return out;
     var x = new Intra(bars, opts.nowMs), i = x.n - 1;
     if (x.today < 1 || i < x.i0) return out;
@@ -842,6 +848,7 @@ var SRCore = (function () {
       var f = finalize(raw, st, P, { regime: opts.regime, tradedValueCr: opts.tradedValueCr, track: opts.tracks && opts.tracks[st.id] });
       if (f.signal) { f.signal.symbol = symbol; f.signal.barTime = bars[i].t; f.signal.barEnd = hhmm(endMin); out.signals.push(f.signal); }
       else out.rejected.push({ strategy: st.id, why: f.rejected });
+      if (f.shadow) { f.shadow.symbol = symbol; f.shadow.barTime = bars[i].t; f.shadow.barEnd = hhmm(endMin); f.shadow.shadow = true; out.shadow.push(f.shadow); }
     });
     return out;
   }
@@ -884,6 +891,143 @@ var SRCore = (function () {
     return { brokerage: round(brokerage), stt: round(stt), stamp: round(stamp), txn: round(txn), sebi: round(sebi), gst: round(gst), dp: round(dp), total: round(total) };
   }
 
+  /* ============================ Evaluation ============================ */
+
+  /**
+   * Follow one alert through the candles after it, the way a paper trade would go.
+   *   alert: {direction: 'BUY'|'SHORT', entryLow, entryHigh, stop, target}
+   *   candles: oldest first, only those after the alert (1-minute bars for intraday, daily bars otherwise)
+   *   opts: {expiryMs, nowMs, barMs} — a candle counts while t + barMs <= expiryMs (barMs 60000 for
+   *         1-minute bars, 0 for daily bars, so the expiry day itself counts)
+   * Rules, the same for every horizon:
+   *   - Entry like a limit order: the first candle that trades into the entry range or better. If it opens
+   *     inside or better, the fill is the open; otherwise the edge of the range. Opening beyond the stop
+   *     before any entry means the setup failed: NOT_TRIGGERED.
+   *   - After entry: a gap through the stop or target exits at the open. If one candle touches both
+   *     the stop and the target, the stop is assumed to have come first. In the entry candle, the target
+   *     only counts if the fill was at the open.
+   *   - Still open at expiry: EXPIRED at the last close before the expiry. Never filled by then: NOT_TRIGGERED.
+   * Returns {state: 'OPEN'|'ACTIVE'|'CLOSED', outcome, fillT, fillPrice, exitT, exitPrice, lastT, lastPrice, pct, bars, note}.
+   * pct is the gross move in the trade's favour, in percent.
+   */
+  function simulateTrade(a, candles, opts) {
+    opts = opts || {};
+    var buy = a.direction !== 'SHORT', exp = opts.expiryMs, barMs = opts.barMs || 0;
+    var out = { state: 'OPEN', outcome: '', fillT: null, fillPrice: null, exitT: null, exitPrice: null, lastT: null, lastPrice: null, pct: null, bars: 0, note: '' };
+    var move = function (from, to) { return buy ? (to / from - 1) * 100 : (from - to) / from * 100; };
+    var fillIndex = -1, k, c;
+    var close = function (outcome, price, cc, idx) {
+      out.state = 'CLOSED'; out.outcome = outcome; out.exitT = cc.t; out.exitPrice = price;
+      out.pct = round(move(out.fillPrice, price), 3); out.bars = idx - fillIndex;
+      return out;
+    };
+    for (k = 0; k < (candles || []).length; k++) {
+      c = candles[k];
+      if (num(exp) && c.t + barMs > exp) break;
+      out.lastT = c.t; out.lastPrice = c.c;
+      if (fillIndex < 0) {
+        var touched = buy ? c.l <= a.entryHigh : c.h >= a.entryLow;
+        if (!touched) continue;
+        var atOpen = buy ? c.o <= a.entryHigh : c.o >= a.entryLow;
+        var fill = atOpen ? c.o : (buy ? a.entryHigh : a.entryLow);
+        if (buy ? fill <= a.stop : fill >= a.stop) {
+          out.state = 'CLOSED'; out.outcome = 'NOT_TRIGGERED'; out.note = 'Opened beyond the stop before an entry was possible.';
+          return out;
+        }
+        fillIndex = k; out.state = 'ACTIVE'; out.fillT = c.t; out.fillPrice = fill;
+        if (buy ? c.l <= a.stop : c.h >= a.stop) return close('STOP_HIT', a.stop, c, k);
+        if (atOpen && (buy ? c.h >= a.target : c.l <= a.target)) return close('TARGET_HIT', a.target, c, k);
+        continue;
+      }
+      if (buy ? c.o <= a.stop : c.o >= a.stop) return close('STOP_HIT', c.o, c, k);
+      if (buy ? c.o >= a.target : c.o <= a.target) return close('TARGET_HIT', c.o, c, k);
+      if (buy ? c.l <= a.stop : c.h >= a.stop) return close('STOP_HIT', a.stop, c, k);
+      if (buy ? c.h >= a.target : c.l <= a.target) return close('TARGET_HIT', a.target, c, k);
+    }
+    var ended = num(exp) && num(opts.nowMs) && opts.nowMs >= exp;
+    if (fillIndex < 0) {
+      if (ended) { out.state = 'CLOSED'; out.outcome = 'NOT_TRIGGERED'; out.note = 'The price never came into the entry range before the alert expired.'; }
+      return out;
+    }
+    if (ended) return close('EXPIRED', out.lastPrice, { t: out.lastT }, k - 1);
+    out.pct = round(move(out.fillPrice, out.lastPrice), 3);
+    out.bars = (k - 1) - fillIndex;
+    return out;
+  }
+
+  /** Rupee result of a paper trade after estimated Zerodha charges. */
+  function tradeResult(direction, qty, fill, exit, intraday, rates) {
+    if (!(qty > 0) || !(fill > 0) || !(exit > 0)) return { grossPnl: 0, charges: 0, netPnl: 0, netPct: null };
+    var buyValue = qty * (direction === 'SHORT' ? exit : fill), sellValue = qty * (direction === 'SHORT' ? fill : exit);
+    var gross = sellValue - buyValue, ch = charges(buyValue, sellValue, intraday, rates).total, net = gross - ch;
+    return { grossPnl: round(gross), charges: round(ch), netPnl: round(net), netPct: round(net / (qty * fill) * 100, 3) };
+  }
+
+  /**
+   * Strategy metrics from closed trades [{netPct, netPnl?, exitT, holdDays?, alphaPct?}], in exit order.
+   * Drawdown is on an equity curve that starts at `capital` (rupee results when every trade has one,
+   * otherwise percent results compounded). Profit factor is null while there are no losses.
+   */
+  function metrics(trades, opts) {
+    opts = opts || {};
+    var cap = opts.capital > 0 ? opts.capital : 100000;
+    var list = (trades || []).filter(function (x) { return num(x.netPct); }).slice().sort(function (a, b) { return (a.exitT || 0) - (b.exitT || 0); });
+    var money = list.length > 0 && list.every(function (x) { return num(x.netPnl); });
+    var n = list.length, wins = 0, losses = 0, flats = 0, sumW = 0, sumL = 0, gp = 0, gl = 0, sum = 0;
+    var hold = 0, nHold = 0, alpha = 0, nAlpha = 0, eq = cap, peak = cap, maxDD = 0, total = 0;
+    list.forEach(function (x) {
+      sum += x.netPct;
+      if (x.netPct > 0) { wins++; sumW += x.netPct; } else if (x.netPct < 0) { losses++; sumL += x.netPct; } else flats++;
+      var v = money ? x.netPnl : x.netPct;
+      if (v > 0) gp += v; else gl -= v;
+      if (money) { total += x.netPnl; eq += x.netPnl; } else eq *= 1 + x.netPct / 100;
+      if (eq > peak) peak = eq;
+      var dd = peak > 0 ? (peak - eq) / peak * 100 : 0;
+      if (dd > maxDD) maxDD = dd;
+      if (num(x.holdDays)) { hold += x.holdDays; nHold++; }
+      if (num(x.alphaPct)) { alpha += x.alphaPct; nAlpha++; }
+    });
+    return {
+      trades: n, wins: wins, losses: losses, flats: flats,
+      winRatePct: n ? round(wins / n * 100, 1) : null,
+      avgWinPct: wins ? round(sumW / wins, 2) : null,
+      avgLossPct: losses ? round(sumL / losses, 2) : null,
+      expectancyPct: n ? round(sum / n, 3) : null,
+      profitFactor: gl > 0 ? round(gp / gl, 2) : null,
+      maxDrawdownPct: n ? round(maxDD, 2) : null,
+      avgHoldDays: nHold ? round(hold / nHold, 2) : null,
+      avgAlphaPct: nAlpha ? round(alpha / nAlpha, 2) : null,
+      totalNetPnl: money ? round(total) : null,
+      returnPct: n ? round((eq / cap - 1) * 100, 2) : null,
+    };
+  }
+
+  /**
+   * Live-ready, Rejected or still Paper, from a strategy's metrics.
+   * rules: {minTrades, minPF, maxDrawdownPct}
+   *   LIVE_READY: at least minTrades closed trades, average net result above zero after charges,
+   *               profit factor at least minPF, drawdown within the limit, and beating Nifty 50 over
+   *               the same holding periods (average alpha above zero).
+   *   REJECTED:   at least minTrades and an average net result below zero.
+   */
+  function graduate(m, rules) {
+    var need = rules.minTrades;
+    if (!m || !(m.trades >= need)) return { status: 'PAPER', reason: 'Needs more data: ' + (m ? m.trades : 0) + ' of ' + need + ' closed paper trades.' };
+    if (m.expectancyPct < 0) return { status: 'REJECTED', reason: 'Loses ' + Math.abs(m.expectancyPct).toFixed(2) + '% per trade on average after charges, over ' + m.trades + ' trades.' };
+    var pfOk = m.profitFactor === null ? (m.losses === 0 && m.wins > 0) : m.profitFactor >= rules.minPF;
+    var fails = [];
+    if (!(m.expectancyPct > 0)) fails.push('average result is not above zero');
+    if (!pfOk) fails.push('profit factor ' + m.profitFactor + ' is below ' + rules.minPF);
+    if (!(m.maxDrawdownPct <= rules.maxDrawdownPct)) fails.push('drawdown ' + m.maxDrawdownPct + '% is above ' + rules.maxDrawdownPct + '%');
+    if (!(m.avgAlphaPct > 0)) fails.push('does not beat Nifty 50 over the same holding periods');
+    if (fails.length) return { status: 'PAPER', reason: 'Not yet: ' + fails.join('; ') + '.' };
+    return {
+      status: 'LIVE_READY',
+      reason: m.winRatePct + '% win over ' + m.trades + ' trades, ' + (m.expectancyPct >= 0 ? '+' : '−') + Math.abs(m.expectancyPct).toFixed(2) + '% a trade after charges, profit factor ' +
+        (m.profitFactor === null ? 'with no losses' : m.profitFactor) + ', beating Nifty 50 by ' + m.avgAlphaPct.toFixed(2) + '% a trade.',
+    };
+  }
+
   return {
     VERSION: VERSION,
     OPEN_MIN: OPEN_MIN,
@@ -908,5 +1052,9 @@ var SRCore = (function () {
     confidence: confidence,
     positionSize: positionSize,
     charges: charges,
+    simulateTrade: simulateTrade,
+    tradeResult: tradeResult,
+    metrics: metrics,
+    graduate: graduate,
   };
 })();

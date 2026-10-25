@@ -8,8 +8,11 @@
  *   09:21–14:31  a minute after each 5-minute bar closes: intraday scan (Signals.gs)
  *   09:15–15:30  every few minutes: market snapshot
  *   15:10   square-off reminder when intraday alerts went out today
- *   16:00+  end of day in steps: update price history, regime, swing/medium/long scans,
- *           closing summary on Telegram and email; then the minute trigger removes itself
+ *   16:00+  end of day in steps: update price history, judge intraday alerts (1-minute candles),
+ *           judge swing/medium/long alerts and update paper trades and strategy numbers (Review.gs),
+ *           regime and new swing/medium/long scans, closing summary with paper results on Telegram
+ *           and email (plus the readiness report on day 30, 60 and 90); then the minute trigger removes itself
+ *   Saturday weekly report: Live-ready / Rejected decisions and the week's paper results
  * Weekends and NSE holidays are skipped.
  */
 
@@ -145,7 +148,7 @@ function engineTick() {
   Jobs.run('tick', function () { Engine.tick(); }, { lock: true, wait: 1000 });
 }
 
-/** Runs every Saturday morning. The full weekly report arrives in Phase 3. */
+/** Runs every Saturday morning: strategy decisions and the weekly report. */
 function weeklyReport() {
   Jobs.run('weekly', function () { Engine.weekly(); }, { lock: true, wait: 20000 });
 }
@@ -191,6 +194,8 @@ var Engine = {
     var self = this;
     var steps = [
       { key: 'hist', job: 'historyUpdate', run: function () { return Scans.updateHistory(today, day, deadline); } },
+      { key: 'evi', job: 'evaluateIntraday', run: function () { return Review.intraday(today, day, deadline); } },
+      { key: 'evd', job: 'evaluateDaily', run: function () { Review.daily(today); return 'done'; } },
       { key: 'scan', job: 'endOfDayScan', run: function () { var r = Scans.endOfDay(today, day); day.eodScan = { scanned: r.scanned || 0, signals: r.signals || 0 }; return 'done'; } },
       { key: 'sum', job: 'endOfDay', run: function () { self.endOfDay(today, day); return 'done'; } },
     ];
@@ -296,7 +301,7 @@ var Engine = {
 
   /** Reminder to close intraday positions, only when intraday alerts went out today. */
   squareOff: function (today) {
-    var list = AlertBook.today(today).filter(function (a) { return a.horizon === 'INTRADAY'; });
+    var list = AlertBook.today(today).filter(function (a) { return a.horizon === 'INTRADAY' && (a.track || 'main') !== 'shadow'; });
     if (!list.length) return 0;
     var e = Notify.esc, lines = ['⏰ <b>Square-off reminder</b>', list.length + ' intraday alert' + (list.length > 1 ? 's' : '') + ' went out today. If you took any, close ' + (list.length > 1 ? 'them' : 'it') + ' before ' + e(Config.get('intradayExpiry')) + '.', ''];
     list.slice(0, 12).forEach(function (a) { lines.push((a.direction === 'SHORT' ? 'SHORT ' : 'BUY ') + e(a.symbol) + ' · ' + e(SRCore.strategy(a.strategy) ? SRCore.strategy(a.strategy).name : a.strategy) + ' · ' + Fmt.time(a.createdAt.getTime())); });
@@ -320,12 +325,14 @@ var Engine = {
     }
     lines.push('');
     lines = lines.concat(this.signalLines(today, day));
+    lines.push('');
+    try { lines = lines.concat(Review.paperLines(today)); } catch (e) { ErrorLog.add('paperLines', e); lines.push('Paper results could not be read: ' + Notify.esc(Secrets.mask(e.message))); }
     var errors = ErrorLog.countToday();
     var source = snap.sources.indexOf('angel') >= 0 ? 'Data from Angel One.' : 'Data from backups only (' + snap.sources.join(', ') + '), Angel One did not answer.';
     lines.push('', 'Engine: ' + (day.hbCount || 0) + ' market checks today, ' + (errors ? errors + ' error' + (errors > 1 ? 's' : '') + ' logged (see the ErrorLog sheet).' : 'no errors.') + ' ' + source);
     if (day.histNote) lines.push('⚠️ ' + Notify.esc(day.histNote));
     if (day.eodSkipped && day.eodSkipped.length) lines.push('⚠️ Skipped after three failed tries: ' + Notify.esc(day.eodSkipped.join(', ')) + '.');
-    lines.push('Paper trading and results start in Phase 3; every alert is already logged.');
+    lines.push('Paper results are judged on real prices after estimated Zerodha charges. Not investment advice.');
     Notify.safeTelegram(lines.join('\n'));
     if (Config.get('emailDigest')) {
       try { Notify.email('Daily summary ' + Fmt.day(today), Notify.htmlFromTelegram(lines.join('\n'))); }
@@ -333,6 +340,7 @@ var Engine = {
     }
     Store.trim('HealthLog', 3000);
     Store.trim('ErrorLog', 1000);
+    try { Review.readinessIfDue(today); } catch (e) { ErrorLog.add('readiness', e); }
   },
 
   /** The closing summary's section on today's signals. */
@@ -340,9 +348,13 @@ var Engine = {
     var e = Notify.esc, out = [];
     var reg = Market.saved();
     out.push(Market.line(reg));
-    var list = AlertBook.today(today);
+    var all = AlertBook.today(today);
+    var list = all.filter(function (a) { return (a.track || 'main') !== 'shadow'; });
+    var shadowN = all.length - list.length;
+    var shadowLine = shadowN ? shadowN + ' more signal' + (shadowN > 1 ? 's were' : ' was') + ' blocked by the regime and paper-tracked silently, to test the filter.' : '';
     if (!list.length) {
       out.push('<b>Signals today</b>: none.' + (day.eodScan && day.eodScan.scanned ? ' ' + day.eodScan.scanned + ' stocks checked at the close.' : ''));
+      if (shadowLine) out.push(shadowLine);
       return out;
     }
     var by = {};
@@ -354,12 +366,13 @@ var Engine = {
       out.push((a.direction === 'EXIT' ? 'EXIT ' : a.direction === 'SHORT' ? 'SHORT ' : 'BUY ') + e(a.symbol) + ' · ' + e(st ? st.name : a.strategy) + ' · conf ' + a.confidence);
     });
     if (list.length > 15) out.push('… and ' + (list.length - 15) + ' more in the Alerts sheet.');
+    if (shadowLine) out.push(shadowLine);
     return out;
   },
 
+  /** Saturday: Live-ready / Rejected decisions and the weekly report (Review.gs). */
   weekly: function () {
-    // The weekly performance report and strategy review arrive in Phase 3.
-    Health.log('weekly', 'engine', true, 0, 0, 'Weekly report is added in Phase 3');
+    return Review.weekly();
   },
 
   /** In December, remind once a week to add next year's NSE holidays. */

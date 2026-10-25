@@ -11,7 +11,7 @@ import * as SC from './scenarios.mjs';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const FILES = path.join(here, '..', '..', 'apps-script');
 // Setup.gs first on purpose: the engine must not depend on the order files load in.
-const ORDER = ['Setup.gs', 'Signals.gs', 'Engine.gs', 'Api.gs', 'Data.gs', 'Core.gs'];
+const ORDER = ['Setup.gs', 'Review.gs', 'Signals.gs', 'Engine.gs', 'Api.gs', 'Data.gs', 'Core.gs'];
 // Every test runs under the real manifest, so a permission missing from appsscript.json fails here first.
 const MANIFEST = JSON.parse(fs.readFileSync(path.join(FILES, 'appsscript.json'), 'utf8'));
 
@@ -175,7 +175,7 @@ test('files load in any order and the menu is created', () => {
   const { sim, G } = fresh();
   sim.state.uiAvailable = true;
   G.onOpen();
-  eq(sim.state.menu.items.length, 9, 'menu items');
+  eq(sim.state.menu.items.length, 10, 'menu items');
   eq(sim.state.menu.items[0][1], 'menuCreateSheets');
 });
 
@@ -191,7 +191,7 @@ test('TOTP matches RFC 6238 test vectors', () => {
 test('setupSheets creates every sheet, keeps text values as text, and is safe to re-run', () => {
   const { sim, G } = fresh();
   const r = G.setupSheets();
-  eq(r.created.length, 14, 'sheets created');
+  eq(r.created.length, 15, 'sheets created');
   ok(!sim.ss.getSheetByName('Sheet1'), 'default sheet removed');
   eq(sim.ss.tz, 'Asia/Kolkata', 'spreadsheet time zone');
   const cfg = sim.ss.getSheetByName('Config').dump();
@@ -493,11 +493,14 @@ function marketWorld(opts = {}) {
   const nifty = SC.dailyFrom(SC.trend(300, 20000, 0.08), { end, vol: 0 });
   const vix = SC.dailyFrom(Array.from({ length: 300 }, () => 12.5), { end, vol: 0 });
   const quiet = SC.dailyFrom(SC.trend(300, 100, 0.01), { end, vol: 2e6 }); // liquid but going nowhere
-  w.daily = { '99926000': nifty, '99926017': vix, ...(opts.daily || {}) };
+  const niftyK = opts.niftyDown ? SC.dailyFrom(SC.trend(300, 26000, -0.08), { end, vol: 0 }) : nifty;
+  w.daily = { '99926000': niftyK, '99926017': vix, ...(opts.daily || {}) };
   w.intra = opts.intra || {};
+  w.minute = opts.minute || {};
   w.candleGen = (token, interval) => {
     if (interval === 'ONE_DAY') return w.daily[token] || (BY_TOKEN[token] && opts.allQuiet !== false ? quiet : null);
     if (interval === 'FIVE_MINUTE') return w.intra[token] || null;
+    if (interval === 'ONE_MINUTE') return w.minute[token] || null;
     return null;
   };
   return env;
@@ -745,6 +748,198 @@ test('Drive: a clear message when the Drive API or the permission is missing', (
   narrow.ctx.setupSheets();
   const r3 = narrow.ctx.Checks.runOne('Google Drive files', narrow.ctx.Checks.drive);
   eq(r3.result, 'FAIL'); ok(/permission is missing/.test(r3.detail), r3.detail);
+});
+
+// =================== Phase 3: evaluation, paper trades, graduation, reports ===================
+
+/** 1-minute candles for one day: flat at `start` until `fromHHMM`, then moving `step` a minute. */
+function minuteDay(ymd, start, fromHHMM, step) {
+  const out = []; let p = start;
+  const [fh, fm] = fromHHMM.split(':').map(Number), from = fh * 60 + fm;
+  for (let m = 555; m < 930; m++) {
+    const o = p;
+    if (m >= from) p = Math.round((p + step) * 100) / 100;
+    const t = Date.parse(`${ymd}T${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}:00+05:30`);
+    out.push({ t, o, h: Math.max(o, p) + 0.03, l: Math.min(o, p) - 0.03, c: p, v: 1000 });
+  }
+  return out;
+}
+const sheetRows = (sim, name) => { const d = sim.ss.getSheetByName(name).dump(); const h = d[0]; return d.slice(1).map((r) => Object.fromEntries(h.map((k, i) => [k, r[i]]))); };
+
+test('evaluation: an intraday alert is judged on 1-minute candles after the close and becomes a paper trade', () => {
+  const day = '2026-10-26';
+  const { G, sim, w } = marketWorld({ end: day, intra: { [TOKENS.TCS]: SC.intraday.orb() }, minute: { [TOKENS.TCS]: minuteDay(day, 101.1, '09:47', 0.02) } });
+  G.MarketCal._now = at('2026-10-25T21:00:00+05:30');
+  G.loadHistory();
+  G.Schedule.install();
+  for (const t of ['08:50', '09:41', '09:46']) tickAtDay(G, day, t);
+  eq(alertsRows(sim).length, 1, 'the breakout alert');
+  const sent0 = w.telegram.length;
+  tickAtDay(G, day, '16:00');
+  const a = alertsRows(sim)[0];
+  eq(a.status, 'CLOSED'); eq(a.outcome, 'TARGET_HIT');
+  eq(a.fillPrice, 101.1, 'filled at the open of the first minute after the alert'); eq(a.exitPrice, a.target1);
+  ok(a.paperQty > 0 && a.charges > 0 && a.netPnl < a.grossPnl && a.netPnl > 0, 'net of charges: ' + JSON.stringify({ q: a.paperQty, g: a.grossPnl, c: a.charges, n: a.netPnl }));
+  ok(a.holdDays > 0 && a.holdDays < 1, 'part of a session'); eq(a.niftyPct, 0, 'flat Nifty'); eq(a.alphaPct, a.netPct);
+  ok(w.candleCalls.some((c) => c.interval === 'ONE_MINUTE' && c.symboltoken === TOKENS.TCS), '1-minute candles fetched');
+  const pt = sheetRows(sim, 'PaperTrades');
+  eq(pt.length, 1); eq(pt[0].status, 'CLOSED'); eq(pt[0].exitReason, 'TARGET_HIT'); eq(pt[0].netPnl, a.netPnl); eq(pt[0].track, 'main');
+  const st = sheetRows(sim, 'Strategies').find((r) => r.id === 'orb');
+  eq(st.trades, 1); eq(st.wins, 1); eq(st.winRatePct, 100); ok(/1 of 30/.test(st.note), st.note);
+  const m = sheetRows(sim, 'Metrics').find((r) => r.strategy === 'orb' && r.regime === 'ALL' && r.track === 'main');
+  eq(m.trades, 1); ok(/Insufficient data/.test(m.note), m.note);
+  const summary = w.telegram.slice(sent0).join('\n');
+  ok(/Paper trading/.test(summary) && /Closed today: 1/.test(summary) && /TCS target hit/.test(summary) && /Since start/.test(summary), summary);
+  sim.state.uiAvailable = true;
+  G.showStatus();
+  ok(/1 closed, net ₹/.test(sim.state.dialogs[sim.state.dialogs.length - 1].html), 'status shows the paper account');
+});
+
+test('evaluation: swing and medium alerts are judged on later daily candles, with checkpoints against Nifty', () => {
+  const end = '2026-10-26';
+  const rel = SC.daily['base-breakout']();
+  const { G, sim, w } = marketWorld({ end, daily: { [TOKENS.RELIANCE]: rel } });
+  G.MarketCal._now = at('2026-10-23T21:00:00+05:30');
+  G.loadHistory();
+  G.MarketCal._now = at('2026-10-26T08:20:00+05:30');
+  G.Schedule.install();
+  tickAtDay(G, end, '08:50');
+  tickAtDay(G, end, '16:00');
+  let rows = alertsRows(sim);
+  const bb = rows.find((r) => r.strategy === 'base-breakout');
+  eq(bb.status, 'OPEN', 'nothing to judge on the alert day itself');
+  // The next days: opens inside the entry range, then climbs through the target.
+  const last = rel[rel.length - 1].c;
+  const next = [[1.002, 1.01], [1.01, 1.03], [1.03, 1.07]].map(([o, c], i) => ({ o: last * o, c: last * c }));
+  const ts = SC.weekdays('2026-10-29', 3);
+  const more = next.map((x, i) => ({ t: ts[i], o: Math.round(x.o * 100) / 100, h: Math.round(Math.max(x.o, x.c) * 1.004 * 100) / 100, l: Math.round(Math.min(x.o, x.c) * 0.996 * 100) / 100, c: Math.round(x.c * 100) / 100, v: 2e6 }));
+  G.History.put('RELIANCE', more);
+  G.History.put('NIFTY 50', ts.map((t) => ({ t, o: 25000, h: 25010, l: 24990, c: 25000, v: 0 })));
+  G.History.flush();
+  G.MarketCal._now = at('2026-10-29T16:30:00+05:30');
+  G.Review.daily('2026-10-29');
+  rows = alertsRows(sim);
+  const b2 = rows.find((r) => r.strategy === 'base-breakout');
+  eq(b2.status, 'CLOSED'); eq(b2.outcome, 'TARGET_HIT'); eq(b2.fillPrice, more[0].o, 'filled at the next open');
+  ok(b2.netPnl > 0 && b2.holdDays === 2, JSON.stringify({ n: b2.netPnl, h: b2.holdDays }));
+  const tt = rows.find((r) => r.strategy === 'trend-template');
+  eq(tt.status, 'ACTIVE', 'medium-term idea still running');
+  ok(sheetRows(sim, 'PaperTrades').some((p) => p.strategy === 'trend-template' && p.status === 'OPEN' && p.unrealisedPnl !== ''), 'open trade marked to the last close');
+  let cps = sheetRows(sim, 'Checkpoints');
+  ok(cps.some((c) => c.alertId === b2.id && c.label === 'FINAL') === false, 'swing trades have no checkpoints');
+  eq(cps.length, 0, 'no checkpoints due yet');
+  // A month later the medium-term ideas get their 1-month checkpoint.
+  const later = SC.weekdays('2026-11-27', 21).filter((t) => t > ts[2]).map((t) => ({ t, o: last * 1.07, h: last * 1.08, l: last * 1.06, c: last * 1.075, v: 2e6 }));
+  G.History.put('RELIANCE', later);
+  G.History.put('NIFTY 50', later.map((x) => ({ t: x.t, o: 25500, h: 25510, l: 25490, c: 25500, v: 0 })));
+  G.History.flush();
+  G.MarketCal._now = at('2026-11-27T16:30:00+05:30');
+  G.Review.daily('2026-11-27');
+  cps = sheetRows(sim, 'Checkpoints');
+  const one = cps.filter((c) => c.label === '1M');
+  eq(one.length, 2, 'trend template and near-high each get a 1-month checkpoint');
+  const nk = G.History.get('NIFTY 50'), nBase = nk.find((c) => G.History.msToDay(c.t) === 20261026).c;
+  const nWant = Math.round((25500 / nBase - 1) * 10000) / 100;
+  ok(one.every((c) => c.returnPct > 0 && Math.abs(c.niftyReturnPct - nWant) < 0.01 && Math.abs(c.alphaPct - (c.returnPct - c.niftyReturnPct)) < 0.02), JSON.stringify(one) + ' want Nifty ' + nWant);
+  G.Review.daily('2026-11-27');
+  eq(sheetRows(sim, 'Checkpoints').length, cps.length, 'checkpoints are written once');
+});
+
+test('graduation: 30 good paper trades make a strategy Live-ready; a bad run demotes it, with a message each time', () => {
+  const { G, sim, w } = marketWorld();
+  G.AlertBook.ensureHeaders();
+  const mk = (i, pct) => ({
+    id: 'A20261001-0930-T' + i + '-orb', createdAt: new Date(Date.parse('2026-09-01T10:00:00+05:30') + i * 3600000), symbol: 'BIG001', horizon: 'INTRADAY', strategy: 'orb',
+    direction: 'BUY', entryLow: 100, entryHigh: 100.2, stop: 99, target1: 102, regime: 'BULL', status: 'CLOSED', outcome: pct > 0 ? 'TARGET_HIT' : 'STOP_HIT',
+    closedAt: new Date(Date.parse('2026-09-01T14:00:00+05:30') + i * 3600000), netPct: pct, netPnl: pct * 100, paperQty: 10, alphaPct: pct - 0.1, holdDays: 0.2, track: 'main',
+  });
+  G.Store.append('Alerts', Array.from({ length: 30 }, (_, i) => mk(i, i % 3 === 0 ? -0.5 : 1.2)));
+  G.MarketCal._now = at('2026-10-31T10:30:00+05:30'); // Saturday
+  const before = w.telegram.length;
+  G.weeklyReport();
+  const msgs = w.telegram.slice(before).join('\n----\n');
+  ok(/Opening-range breakout is now LIVE-READY/.test(msgs), msgs);
+  ok(/Weekly report/.test(msgs) && /Status changes this week/.test(msgs), msgs);
+  G.StrategyBook._map = null;
+  eq(G.StrategyBook.load().orb.status, 'LIVE_READY');
+  const st = sheetRows(sim, 'Strategies').find((r) => r.id === 'orb');
+  eq(st.status, 'LIVE_READY'); ok(st.statusSince, 'date of the change');
+  // Its next alert carries the record.
+  G.Review.refreshStats(G.Review.alerts().rows);
+  G.StrategyBook._map = null;
+  const fmt = G.AlertBook.format({ symbol: 'TCS', strategy: 'orb', strategyName: 'Opening-range breakout', horizon: 'INTRADAY', direction: 'BUY', entry: 100, entryLow: 99.9, entryHigh: 100, stop: 99, target1: 102, target2: null, rr: 2, confidence: 70, reasons: ['x'] },
+    G.StrategyBook.load().orb, { qty: 5, value: 500, riskAmount: 5 }, { text: 'Today until 15:15' }, { state: 'BULL' }, 'Test');
+  ok(/LIVE-READY<\/b> · 67% win, 30 trades/.test(fmt), fmt);
+  // Thirty losers in a row: the latest 60 trades now lose money, so it is rejected.
+  G.Store.append('Alerts', Array.from({ length: 30 }, (_, i) => mk(100 + i, -0.8)));
+  G.MarketCal._now = at('2026-11-07T10:30:00+05:30');
+  const b2 = w.telegram.length;
+  G.weeklyReport();
+  const m2 = w.telegram.slice(b2).join('\n');
+  ok(/Opening-range breakout is now REJECTED/.test(m2) && /keeps paper-trading silently/.test(m2), m2);
+  G.StrategyBook._map = null;
+  eq(G.StrategyBook.load().orb.status, 'REJECTED');
+  // An override in the sheet still decides the label.
+  const sh = sim.ss.getSheetByName('Strategies'), d = sh.dump(), i = d.findIndex((r) => r[0] === 'orb'), col = d[0].indexOf('override') + 1;
+  sh.getRange(i + 1, col).setValues([['PAPER']]);
+  G.StrategyBook._map = null;
+  eq(G.StrategyBook.load().orb.status, 'PAPER', 'override wins');
+});
+
+test('readiness report goes out on day 30 (once), and only the latest milestone if several are overdue', () => {
+  const { G, sim, w } = marketWorld();
+  sim.state.props.set('PAPER_START', '2026-09-26');
+  const b = w.telegram.length;
+  eq(G.Review.readinessIfDue('2026-10-26'), 30);
+  const msg = w.telegram.slice(b).join('\n');
+  ok(/Readiness report · day 30/.test(msg) && /Needs more data/.test(msg) && /#\/results/.test(msg), msg);
+  eq(G.Review.readinessIfDue('2026-10-27'), null, 'sent once');
+  ok(sheetRows(sim, 'Reports').some((r) => r.type === 'readiness'), 'saved in Reports');
+  sim.state.props.set('PAPER_START', '2026-08-20'); sim.state.props.delete('READINESS_SENT');
+  eq(G.Review.readinessIfDue('2026-10-26'), 60, 'latest overdue milestone');
+  eq(sim.state.props.get('READINESS_SENT'), '30,60');
+});
+
+test('shadow tracking: in a Bear market an intraday buy is logged silently, judged, and kept out of the record', () => {
+  const day = '2026-10-26';
+  const { G, sim, w } = marketWorld({ end: day, niftyDown: true, intra: { [TOKENS.TCS]: SC.intraday.orb() }, minute: { [TOKENS.TCS]: minuteDay(day, 101.1, '09:47', 0.02) } });
+  G.MarketCal._now = at('2026-10-25T21:00:00+05:30');
+  G.loadHistory();
+  eq(G.Market.saved().state, 'BEAR');
+  G.Schedule.install();
+  for (const t of ['08:50', '09:41']) tickAtDay(G, day, t);
+  const sent0 = w.telegram.length;
+  tickAtDay(G, day, '09:46');
+  eq(w.telegram.length, sent0, 'no message for a blocked buy');
+  const a = alertsRows(sim);
+  eq(a.length, 1); eq(a[0].track, 'shadow'); ok(/blocked by the Bear regime/.test(a[0].telegram), a[0].telegram); ok(/-H$/.test(a[0].id), a[0].id);
+  tickAtDay(G, day, '09:51');
+  eq(alertsRows(sim).length, 1, 'shadows are not repeated either');
+  tickAtDay(G, day, '16:00');
+  const b = alertsRows(sim)[0];
+  eq(b.outcome, 'TARGET_HIT', 'judged like any alert');
+  eq(sheetRows(sim, 'Strategies').find((r) => r.id === 'orb').trades, 0, 'not in the strategy record');
+  ok(sheetRows(sim, 'Metrics').some((r) => r.strategy === 'orb' && r.track === 'shadow' && r.trades === 1), 'in the shadow metrics');
+  const summary = w.telegram.slice(sent0).join('\n');
+  ok(/1 more signal was blocked by the regime/.test(summary), summary);
+  ok(!/Closed today: 1/.test(summary), 'paper account counts main trades only');
+  const before = w.telegram.length;
+  G.MarketCal._now = at('2026-10-31T10:30:00+05:30');
+  G.weeklyReport();
+  ok(/Regime filter check/.test(w.telegram.slice(before).join('\n')), 'weekly report compares blocked and taken signals');
+});
+
+test('menu: update paper results now', () => {
+  const { G, sim } = marketWorld();
+  sim.state.uiAvailable = true;
+  G.MarketCal._now = at('2026-10-25T21:00:00+05:30');
+  G.loadHistory();
+  const r = G.updatePaperResults();
+  ok(r && r.daily, 'ran');
+  ok(sim.state.alerts.some((x) => /Paper results updated/.test(x.title)), 'dialog');
+  G.MarketCal._now = at('2026-10-26T11:00:00+05:30');
+  G.updatePaperResults();
+  ok(sim.state.alerts.some((x) => /after 15:30/.test(x.msg)), 'not during market hours');
 });
 
 coreTests({ test, eq, ok, root: path.join(here, '..', '..') });

@@ -12,6 +12,7 @@ Read `PLAN.md` first: it holds the architecture, verified API facts, quota budge
 - No build step. Vanilla JS ES modules in the browser; plain scripts in Apps Script (V8).
 - Never commit secrets, tokens, personal holdings or account data. Secrets live in Apps Script Script Properties only.
 - `core/core.js` and `apps-script/Core.gs` must stay byte-identical: no `import`/`export`, no DOM, no Apps Script services inside. Edit core.js, then `cp core/core.js apps-script/Core.gs` (a test fails if they differ).
+- Evaluation maths (fills, exits, charges, metrics, graduation) also lives in core.js, so the live record and the Phase 5 backtester use the same rules. The Alerts sheet is the source of truth; PaperTrades and Metrics are rebuilt from it.
 - Strategy thresholds live in `SRCore.PARAMS`; they appear in the Config sheet automatically. Each strategy has a scenario in `tools/gas-sim/scenarios.mjs` and a test that it fires there (and its mirror fires as a short, for intraday).
 - Every interface string goes through `js/i18n.js` (English only; Malayalam was dropped at the owner's request).
 - Sample data lives only in `js/demo.js`, and any screen showing it must show the design-preview banner.

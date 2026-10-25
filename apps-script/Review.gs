@@ -1,0 +1,655 @@
+/**
+ * Stock Radar — Review.gs
+ * Checks every alert against what the price did next, keeps the paper trades, scores each
+ * strategy, decides Live-ready / Rejected, and writes the daily, weekly and readiness reports.
+ * The maths (fills, exits, charges, metrics, graduation) lives in Core.gs, so the phone app's
+ * backtester uses exactly the same rules.
+ *
+ * How an alert is judged (all automatic):
+ *   - Intraday: after the close, with 1-minute candles from the alert time to 15:15.
+ *   - Swing, medium and long: after each close, with the daily candles in your Drive.
+ *   - The entry fills like a limit order inside the alert's entry range; a candle touching both
+ *     the stop and the target counts as a stop; leftovers close at expiry.
+ *   - Each filled alert is a paper trade sized from the virtual capital (Config paperCapital and
+ *     riskPct), with Zerodha charges taken off. Trades are sized independently, as if each were
+ *     the only position, so every strategy gets a fair record.
+ *   - Exit warnings for holdings are judged 20 trading days later: right if the price fell.
+ */
+
+var REVIEW_OUTCOMES = ['TARGET_HIT', 'STOP_HIT', 'EXPIRED', 'EXIT_RIGHT', 'EXIT_EARLY'];
+
+/* ============================== Sheet helpers ============================== */
+
+var Tables = {
+  /** Make sure a sheet exists with at least these header columns (missing ones are added at the end). */
+  ensure: function (name, headers) {
+    var ss = Store.ss(), sh = ss.getSheetByName(name);
+    if (!sh) sh = ss.insertSheet(name, ss.getSheets().length);
+    var have = Store.headers(sh).filter(function (h) { return h !== ''; });
+    var missing = headers.filter(function (h) { return have.indexOf(h) < 0; });
+    if (missing.length) {
+      Store.ensureCols(sh, have.length + missing.length);
+      sh.getRange(1, have.length + 1, 1, missing.length).setValues([missing]).setFontWeight('bold');
+      if (!have.length) sh.setFrozenRows(1);
+    }
+    return sh;
+  },
+
+  /** Every row as an object (with its sheet row number in _row). */
+  read: function (name) {
+    var sh = Store.sheet(name);
+    if (!sh || sh.getLastRow() < 2) return { sh: sh, hdr: sh ? Store.headers(sh) : [], rows: [] };
+    var hdr = Store.headers(sh);
+    var rows = sh.getRange(2, 1, sh.getLastRow() - 1, hdr.length).getValues().map(function (r, i) {
+      var o = { _row: i + 2 };
+      hdr.forEach(function (h, j) { o[h] = r[j]; });
+      return o;
+    });
+    return { sh: sh, hdr: hdr, rows: rows };
+  },
+
+  /** Write some columns back for all rows from index `from` (0-based in t.rows) to the end. */
+  writeCols: function (t, cols, from) {
+    if (!t.rows.length || from >= t.rows.length) return;
+    var clean = function (v) { return v === null || v === undefined || (typeof v === 'number' && !isFinite(v)) ? '' : v; };
+    cols.forEach(function (c) {
+      var j = t.hdr.indexOf(c);
+      if (j < 0) return;
+      var vals = t.rows.slice(from).map(function (o) { return [clean(o[c])]; });
+      t.sh.getRange(t.rows[from]._row, j + 1, vals.length, 1).setValues(vals);
+    });
+  },
+};
+
+/* ============================== The evaluator ============================== */
+
+var Review = {
+  EVAL_COLS: ['status', 'triggeredAt', 'closedAt', 'outcome', 'outcomePct', 'netPct', 'fillPrice', 'exitPrice', 'paperQty', 'grossPnl', 'charges', 'netPnl', 'niftyPct', 'alphaPct', 'holdDays', 'evaluatedAt'],
+  PAPER_EXTRA: ['direction', 'regime', 'track', 'markPrice', 'unrealisedPnl'],
+  STRAT_EXTRA: ['expectancyPct', 'avgWinPct', 'avgLossPct', 'avgHoldDays', 'openTrades', 'statusReason', 'note'],
+  CHECK_EXTRA: ['strategy', 'horizon'],
+  METRIC_HEADERS: ['strategy', 'name', 'horizon', 'track', 'regime', 'trades', 'wins', 'losses', 'winRatePct', 'avgWinPct', 'avgLossPct', 'expectancyPct', 'profitFactor', 'maxDrawdownPct', 'avgHoldDays', 'avgAlphaPct', 'totalNetPnl', 'note', 'updatedAt'],
+  CHECKPOINTS: [['1M', 1], ['3M', 3], ['6M', 6], ['12M', 12]],
+
+  rates: function () {
+    var c = Config.all();
+    return {
+      brokerageIntradayPct: c.chargeBrokerageIntradayPct, brokerageIntradayMax: c.chargeBrokerageIntradayMax,
+      sttDeliveryPct: c.chargeSttDeliveryPct, sttIntradaySellPct: c.chargeSttIntradaySellPct, txnPct: c.chargeTxnPct,
+      sebiPerCrore: c.chargeSebiPerCrore, stampDeliveryPct: c.chargeStampDeliveryPct, stampIntradayPct: c.chargeStampIntradayPct,
+      gstPct: c.chargeGstPct, dpPerSell: c.chargeDpPerSell,
+    };
+  },
+
+  sizing: function () {
+    return { capital: Number(Config.get('paperCapital')) || 100000, riskPct: Number(Config.get('riskPct')) || 1, maxPer: Number(Config.get('maxPerStockPct')) || 10 };
+  },
+
+  /** The Alerts sheet with every evaluation column present. */
+  alerts: function () {
+    AlertBook.ensureHeaders();
+    return Tables.read('Alerts');
+  },
+
+  ms: function (v) { return v instanceof Date ? v.getTime() : (Date.parse(v) || 0); },
+  num: function (v) { return typeof v === 'number' && isFinite(v); },
+  round: function (x, d) { var f = Math.pow(10, d === undefined ? 2 : d); return Math.round(x * f) / f; },
+
+  /** Mark the start of paper trading the first time the evaluator runs. */
+  startDay: function () {
+    var p = Secrets.props(), s = p.getProperty('PAPER_START');
+    if (!s) { s = MarketCal.ymd(); p.setProperty('PAPER_START', s); }
+    return s;
+  },
+
+  /**
+   * Fill in an alert row from a simulated trade. ctx: {intraday, nowMs, niftyPct(fromT, toT, fillT), toDate(t)}
+   */
+  apply: function (r, s, ctx) {
+    var self = this, sz = this.sizing();
+    r._dirty = true;
+    r.evaluatedAt = new Date(ctx.nowMs);
+    r.status = s.state;
+    r.outcome = s.state === 'CLOSED' ? s.outcome : '';
+    r.triggeredAt = s.fillT !== null ? ctx.toDate(s.fillT, 'fill') : '';
+    r.fillPrice = s.fillPrice !== null ? s.fillPrice : '';
+    r.closedAt = s.state === 'CLOSED' ? (s.exitT !== null ? ctx.toDate(s.exitT, 'exit') : r.validTill) : '';
+    r.exitPrice = s.exitPrice !== null ? s.exitPrice : '';
+    r.outcomePct = this.num(s.pct) && s.state === 'CLOSED' ? this.round(s.pct, 2) : '';
+    ['paperQty', 'grossPnl', 'charges', 'netPnl', 'netPct', 'niftyPct', 'alphaPct', 'holdDays'].forEach(function (k) { r[k] = ''; });
+    r._mark = ''; r._unrealised = '';
+    if (s.fillPrice === null) return r;
+    var size = SRCore.positionSize(sz.capital, sz.riskPct, s.fillPrice, Number(r.stop), sz.maxPer);
+    r.paperQty = size.qty;
+    var price = s.state === 'CLOSED' ? s.exitPrice : s.lastPrice;
+    // Percent results use at least one share, so a stock too pricey for the virtual account still counts in the stats.
+    var res = SRCore.tradeResult(r.direction, Math.max(size.qty, 1), s.fillPrice, price, ctx.intraday, this.rates());
+    if (s.state !== 'CLOSED') {
+      if (size.qty > 0) { r._mark = price; r._unrealised = SRCore.tradeResult(r.direction, size.qty, s.fillPrice, price, ctx.intraday, this.rates()).netPnl; }
+      return r;
+    }
+    r.netPct = res.netPct === null ? '' : res.netPct;
+    if (size.qty > 0) {
+      var real = SRCore.tradeResult(r.direction, size.qty, s.fillPrice, s.exitPrice, ctx.intraday, this.rates());
+      r.grossPnl = real.grossPnl; r.charges = real.charges; r.netPnl = real.netPnl;
+    }
+    var nifty = ctx.niftyPct(s.fillT, s.exitT);
+    if (this.num(nifty)) { r.niftyPct = this.round(nifty, 3); if (this.num(r.netPct)) r.alphaPct = this.round(r.netPct - nifty, 3); }
+    r.holdDays = ctx.intraday ? self.round((s.exitT - s.fillT) / 60000 / 375, 3) : s.bars;
+    return r;
+  },
+
+  /* ------------------------------ Intraday ------------------------------ */
+
+  /**
+   * After the close: judge intraday alerts whose day is over, with 1-minute candles.
+   * Returns 'done' or 'more' (when time ran out).
+   */
+  intraday: function (today, day, deadline) {
+    var t = this.alerts(), nowMs = MarketCal.now().getTime(), self = this;
+    var due = t.rows.filter(function (r) {
+      return r.horizon === 'INTRADAY' && r.status !== 'CLOSED' && r.direction !== 'EXIT' && r.createdAt instanceof Date && self.ms(r.validTill) && self.ms(r.validTill) <= nowMs;
+    });
+    if (!due.length) return 'done';
+    var meta = SymbolsDb.load(), groups = {}, items = [];
+    due.forEach(function (r) {
+      var d = MarketCal.ymd(r.createdAt), key = r.symbol + '|' + d;
+      if (!groups[key]) {
+        groups[key] = { day: d, rows: [] };
+        var m = meta[r.symbol];
+        if (m && m.angelToken) items.push({ key: key, token: String(m.angelToken), from: MarketCal.at(d, '09:15'), to: MarketCal.at(d, '15:30') });
+      }
+      groups[key].rows.push(r);
+      var nk = 'NIFTY 50|' + d;
+      if (!groups[nk]) { groups[nk] = { day: d, rows: [], index: true }; items.push({ key: nk, token: '99926000', from: MarketCal.at(d, '09:15'), to: MarketCal.at(d, '15:30') }); }
+    });
+    var res = Angel.candlesMany(items, 'ONE_MINUTE', { deadline: deadline });
+    var changed = 0;
+    Object.keys(groups).forEach(function (key) {
+      var g = groups[key];
+      if (g.index || !g.rows.length) return;
+      var k = res.data[key];
+      if (!k) {
+        // No minute data: give up after five days so a missing day never blocks the record forever.
+        g.rows.forEach(function (r) {
+          if (nowMs - self.ms(r.validTill) > 5 * 86400000) { r._dirty = true; r.status = 'CLOSED'; r.outcome = 'NO_DATA'; r.closedAt = r.validTill; r.evaluatedAt = new Date(nowMs); changed++; }
+        });
+        return;
+      }
+      var nk = res.data['NIFTY 50|' + g.day] || [];
+      g.rows.forEach(function (r) {
+        var from = Math.ceil(self.ms(r.createdAt) / 60000) * 60000; // the first full minute after the alert went out
+        var after = k.filter(function (c) { return c.t >= from; });
+        var s = SRCore.simulateTrade({ direction: r.direction, entryLow: Number(r.entryLow), entryHigh: Number(r.entryHigh), stop: Number(r.stop), target: Number(r.target1) },
+          after, { expiryMs: self.ms(r.validTill), nowMs: nowMs, barMs: 60000 });
+        self.apply(r, s, {
+          intraday: true, nowMs: nowMs,
+          toDate: function (ms) { return new Date(ms); },
+          niftyPct: function (a, b) { return self.niftyMinutePct(nk, a, b); },
+        });
+        changed++;
+      });
+    });
+    if (changed) this.writeEval(t);
+    Health.log('evaluate', 'intraday', true, 0, changed, changed + ' intraday alerts judged; ' + Object.keys(res.failed).length + ' symbols without minute candles');
+    return res.left.length ? 'more' : 'done';
+  },
+
+  /** Nifty 50 percent change between two moments, from 1-minute candles. */
+  niftyMinutePct: function (k, fromT, toT) {
+    if (!k.length || !this.num(fromT) || !this.num(toT)) return null;
+    var before = null, end = null;
+    for (var i = 0; i < k.length; i++) {
+      if (k[i].t < fromT) before = k[i].c;
+      if (k[i].t <= toT) end = k[i].c;
+    }
+    if (before === null) before = k[0].o;
+    return before > 0 && end !== null ? (end / before - 1) * 100 : null;
+  },
+
+  /** Write the evaluation columns from the first row changed in this run to the end (rows in between keep their values). */
+  writeEval: function (t) {
+    var first = -1;
+    for (var i = 0; i < t.rows.length; i++) if (t.rows[i]._dirty) { first = i; break; }
+    if (first >= 0) Tables.writeCols(t, this.EVAL_COLS, first);
+  },
+
+  /* ------------------------------ Daily horizons ------------------------------ */
+
+  /**
+   * After the close and the history update: judge swing, medium and long alerts and exit warnings with daily
+   * candles, add due checkpoints, rebuild the paper trades and refresh every strategy's numbers.
+   */
+  daily: function (today) {
+    this.startDay();
+    var t = this.alerts(), nowMs = MarketCal.now().getTime(), self = this;
+    var niftyK = History.get('NIFTY 50'), niftyIdx = this.dayIndex(niftyK);
+    var changed = 0, exitDays = Number(Config.get('exitCheckDays')) || 20, cache = {};
+    t.rows.forEach(function (r) {
+      if (r.status === 'CLOSED' || r.horizon === 'INTRADAY' || !r.symbol || !(r.createdAt instanceof Date)) return;
+      var sym = String(r.symbol), k = cache[sym] || (cache[sym] = History.get(sym));
+      var alertDay = History.msToDay(self.ms(r.createdAt));
+      var after = k.filter(function (c) { return History.msToDay(c.t) > alertDay; });
+      if (r.direction === 'EXIT') { self.exitCheck(r, after, nowMs, exitDays, niftyK, niftyIdx, alertDay); changed++; return; }
+      var s = SRCore.simulateTrade({ direction: r.direction, entryLow: Number(r.entryLow), entryHigh: Number(r.entryHigh), stop: Number(r.stop), target: Number(r.target1) },
+        after, { expiryMs: self.ms(r.validTill), nowMs: nowMs, barMs: 0 });
+      self.apply(r, s, {
+        intraday: false, nowMs: nowMs,
+        toDate: function (dayMs, what) { return new Date(dayMs + (what === 'fill' ? 555 : 930) * 60000); },
+        niftyPct: function (a, b) { return self.niftyDailyPct(niftyK, niftyIdx, a, b); },
+      });
+      changed++;
+    });
+    if (changed) this.writeEval(t);
+    var cps = this.checkpoints(t.rows, today, niftyK, niftyIdx);
+    this.paperTrades(t.rows);
+    var stats = this.refreshStats(t.rows);
+    Health.log('evaluate', 'daily', true, 0, changed, changed + ' alerts judged with daily candles, ' + cps + ' checkpoints added');
+    return { judged: changed, checkpoints: cps, stats: stats };
+  },
+
+  /** Map yyyymmdd → index in a daily candle list. */
+  dayIndex: function (k) {
+    var m = {};
+    k.forEach(function (c, i) { m[History.msToDay(c.t)] = i; });
+    return m;
+  },
+
+  /** Nifty 50 change from the close before the entry day to the close of the exit day. */
+  niftyDailyPct: function (k, idx, fillT, exitT) {
+    if (!k.length || !this.num(fillT) || !this.num(exitT)) return null;
+    var i = idx[History.msToDay(fillT)], j = idx[History.msToDay(exitT)];
+    if (i === undefined || j === undefined) return null;
+    var base = i > 0 ? k[i - 1].c : k[i].o;
+    return base > 0 ? (k[j].c / base - 1) * 100 : null;
+  },
+
+  /** An exit warning is judged after N trading days: right if the price is lower than at the warning. */
+  exitCheck: function (r, after, nowMs, n, niftyK, niftyIdx, alertDay) {
+    r._dirty = true;
+    r.evaluatedAt = new Date(nowMs);
+    if (after.length < n) { r.status = 'ACTIVE'; return; }
+    var c = after[n - 1], base = Number(r.entryHigh) || Number(r.entryLow);
+    if (!(base > 0)) { r.status = 'CLOSED'; r.outcome = 'NO_DATA'; r.closedAt = new Date(nowMs); return; }
+    var pct = (base - c.c) / base * 100;
+    r.status = 'CLOSED';
+    r.outcome = pct > 0 ? 'EXIT_RIGHT' : 'EXIT_EARLY';
+    r.closedAt = new Date(c.t + 930 * 60000);
+    r.exitPrice = c.c;
+    r.outcomePct = this.round(pct, 2);
+    r.netPct = r.outcomePct;
+    r.holdDays = n;
+    var i = niftyIdx[alertDay], j = niftyIdx[History.msToDay(c.t)];
+    if (i !== undefined && j !== undefined && niftyK[i].c > 0) {
+      var np = (niftyK[j].c / niftyK[i].c - 1) * 100;
+      r.niftyPct = this.round(np, 2);
+      r.alphaPct = this.round(pct + np, 2); // what selling saved, compared with the market's own move
+    }
+  },
+
+  /* ------------------------------ Checkpoints ------------------------------ */
+
+  addMonths: function (ymd, n) {
+    var y = Number(ymd.slice(0, 4)), m = Number(ymd.slice(5, 7)) - 1 + n, d = Number(ymd.slice(8, 10));
+    y += Math.floor(m / 12); m = ((m % 12) + 12) % 12;
+    var last = new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
+    var pad = function (x) { return (x < 10 ? '0' : '') + x; };
+    return y + '-' + pad(m + 1) + '-' + pad(Math.min(d, last));
+  },
+
+  /** Medium and long buy ideas at 1, 3, 6 and 12 months and at their final result, each against Nifty 50. */
+  checkpoints: function (rows, today, niftyK, niftyIdx) {
+    var self = this, sh = Tables.ensure('Checkpoints', ['alertId', 'symbol', 'label', 'dueDate', 'price', 'returnPct', 'niftyReturnPct', 'alphaPct', 'evaluatedAt'].concat(this.CHECK_EXTRA));
+    var have = {};
+    Tables.read('Checkpoints').rows.forEach(function (c) { have[c.alertId + '|' + c.label] = true; });
+    var todayN = History.ymdToDay(today), add = [];
+    rows.forEach(function (r) {
+      if ((r.horizon !== 'MEDIUM' && r.horizon !== 'LONG') || r.direction !== 'BUY' || r.track === 'shadow' || !(r.createdAt instanceof Date)) return;
+      var k = History.get(String(r.symbol)), idx = self.dayIndex(k), alertYmd = MarketCal.ymd(r.createdAt), aDay = History.ymdToDay(alertYmd);
+      var i0 = idx[aDay];
+      if (i0 === undefined) return;
+      var base = k[i0].c, nBase = niftyIdx[aDay] !== undefined ? niftyK[niftyIdx[aDay]].c : null;
+      var row = function (label, dueYmd, price, dayN) {
+        var ret = (price / base - 1) * 100, nj = niftyIdx[dayN], nret = nBase && nj !== undefined ? (niftyK[nj].c / nBase - 1) * 100 : null;
+        return {
+          alertId: r.id, symbol: r.symbol, label: label, dueDate: MarketCal.at(dueYmd, '15:30'), price: price, returnPct: self.round(ret, 2),
+          niftyReturnPct: nret === null ? '' : self.round(nret, 2), alphaPct: nret === null ? '' : self.round(ret - nret, 2),
+          evaluatedAt: new Date(), strategy: r.strategy, horizon: r.horizon,
+        };
+      };
+      self.CHECKPOINTS.forEach(function (cp) {
+        if (have[r.id + '|' + cp[0]]) return;
+        var due = self.addMonths(alertYmd, cp[1]), dueN = History.ymdToDay(due);
+        if (dueN > todayN) return;
+        for (var j = i0 + 1; j < k.length; j++) {
+          var dn = History.msToDay(k[j].t);
+          if (dn >= dueN) { add.push(row(cp[0], due, k[j].c, dn)); break; }
+        }
+      });
+      if (!have[r.id + '|FINAL'] && r.status === 'CLOSED' && REVIEW_OUTCOMES.indexOf(r.outcome) >= 0 && self.num(r.exitPrice) && r.closedAt instanceof Date) {
+        var closed = MarketCal.ymd(r.closedAt), cn = History.ymdToDay(closed);
+        var f = row('FINAL', closed, r.exitPrice, cn);
+        if (self.num(r.netPct)) f.returnPct = r.netPct; // the paper trade's net result
+        if (self.num(r.alphaPct)) f.alphaPct = r.alphaPct;
+        if (self.num(r.niftyPct)) f.niftyReturnPct = r.niftyPct;
+        add.push(f);
+      }
+    });
+    if (add.length) Store.append('Checkpoints', add);
+    return add.length;
+  },
+
+  /* ------------------------------ Paper trades ------------------------------ */
+
+  /** PaperTrades is rebuilt from the Alerts sheet each time, so it can never drift from it. */
+  paperTrades: function (rows) {
+    Tables.ensure('PaperTrades', ['id', 'alertId', 'symbol', 'horizon', 'strategy', 'status', 'entryAt', 'entryPrice', 'qty', 'stop', 'target', 'exitAt', 'exitPrice', 'exitReason', 'grossPnl', 'charges', 'netPnl', 'netPct', 'holdingDays'].concat(this.PAPER_EXTRA));
+    var self = this;
+    var out = rows.filter(function (r) { return self.num(r.fillPrice) && r.fillPrice > 0 && Number(r.paperQty) > 0; }).map(function (r) {
+      return {
+        id: 'P' + String(r.id).slice(1), alertId: r.id, symbol: r.symbol, horizon: r.horizon, strategy: r.strategy,
+        status: r.status === 'CLOSED' ? 'CLOSED' : 'OPEN', entryAt: r.triggeredAt, entryPrice: r.fillPrice, qty: r.paperQty,
+        stop: r.stop, target: r.target1, exitAt: r.closedAt, exitPrice: r.exitPrice, exitReason: r.outcome,
+        grossPnl: r.grossPnl, charges: r.charges, netPnl: r.netPnl, netPct: r.netPct, holdingDays: r.holdDays,
+        direction: r.direction, regime: r.regime, track: r.track || 'main', markPrice: r._mark || '', unrealisedPnl: r._unrealised === undefined ? '' : r._unrealised,
+      };
+    });
+    Store.replaceAll('PaperTrades', out);
+    return out.length;
+  },
+
+  /* ------------------------------ Strategy numbers ------------------------------ */
+
+  /** Closed trades as the metrics function wants them. */
+  closedTrades: function (rows) {
+    var self = this;
+    return rows.filter(function (r) { return r.status === 'CLOSED' && REVIEW_OUTCOMES.indexOf(r.outcome) >= 0 && self.num(r.netPct); }).map(function (r) {
+      return {
+        strategy: r.strategy, horizon: r.horizon, regime: r.regime || 'UNKNOWN', track: r.track || 'main', symbol: r.symbol,
+        netPct: r.netPct, netPnl: Number(r.paperQty) > 0 && self.num(r.netPnl) ? r.netPnl : null,
+        exitT: self.ms(r.closedAt), holdDays: self.num(r.holdDays) ? r.holdDays : null, alphaPct: self.num(r.alphaPct) ? r.alphaPct : null,
+      };
+    });
+  },
+
+  rules: function () {
+    return { minTrades: Number(Config.get('graduationMinTrades')) || 30, minPF: Number(Config.get('graduationMinPF')) || 1.3, maxDrawdownPct: Number(Config.get('graduationMaxDrawdownPct')) || 15 };
+  },
+
+  /** The latest closed main trades a strategy is judged on (all of them until there are enough). */
+  window: function (list) {
+    var n = Number(Config.get('graduationWindowTrades')) || 60;
+    return list.slice().sort(function (a, b) { return a.exitT - b.exitT; }).slice(-n);
+  },
+
+  /** Metrics sheet (strategy × track × regime), Strategies sheet numbers, and a saved paper summary. */
+  refreshStats: function (rows) {
+    var self = this, trades = this.closedTrades(rows), cap = this.sizing().capital, rules = this.rules(), now = new Date();
+    var metricRows = [];
+    SRCore.STRATEGIES.forEach(function (st) {
+      ['main', 'shadow'].forEach(function (track) {
+        var mine = trades.filter(function (x) { return x.strategy === st.id && x.track === track; });
+        if (track === 'shadow' && !mine.length) return;
+        ['ALL'].concat(SRCore.REGIMES).forEach(function (rg) {
+          var list = rg === 'ALL' ? mine : mine.filter(function (x) { return x.regime === rg; });
+          if (rg !== 'ALL' && !list.length) return;
+          var m = SRCore.metrics(list, { capital: cap });
+          var row = { strategy: st.id, name: st.name, horizon: st.horizon, track: track, regime: rg, updatedAt: now,
+            note: m.trades < rules.minTrades ? 'Insufficient data (' + m.trades + ' of ' + rules.minTrades + ')' : '' };
+          Object.keys(m).forEach(function (k) { row[k] = m[k] === null ? '' : m[k]; });
+          metricRows.push(row);
+        });
+      });
+    });
+    Tables.ensure('Metrics', this.METRIC_HEADERS);
+    Store.replaceAll('Metrics', metricRows);
+
+    // Strategies sheet: the numbers each status is judged on.
+    var sh = Tables.ensure('Strategies', ['id', 'name', 'horizon', 'enabled', 'status', 'override', 'trades', 'wins', 'losses', 'flats', 'winRatePct', 'avgNetPct', 'profitFactor', 'maxDrawdownPct', 'alphaPct', 'updatedAt', 'statusSince'].concat(this.STRAT_EXTRA));
+    StrategyBook.seed();
+    var t = Tables.read('Strategies');
+    var open = {};
+    rows.forEach(function (r) { if (r.status === 'ACTIVE' && (r.track || 'main') === 'main') open[r.strategy] = (open[r.strategy] || 0) + 1; });
+    t.rows.forEach(function (o) {
+      var list = self.window(trades.filter(function (x) { return x.strategy === o.id && x.track === 'main'; }));
+      var m = SRCore.metrics(list, { capital: cap }), g = SRCore.graduate(m, rules);
+      var b = function (v) { return v === null ? '' : v; };
+      o.trades = m.trades; o.wins = m.wins; o.losses = m.losses; o.flats = m.flats; o.winRatePct = b(m.winRatePct);
+      o.avgNetPct = b(m.expectancyPct); o.expectancyPct = b(m.expectancyPct); o.profitFactor = b(m.profitFactor);
+      o.maxDrawdownPct = b(m.maxDrawdownPct); o.alphaPct = b(m.avgAlphaPct); o.avgWinPct = b(m.avgWinPct); o.avgLossPct = b(m.avgLossPct);
+      o.avgHoldDays = b(m.avgHoldDays); o.openTrades = open[o.id] || 0; o.updatedAt = now;
+      o.note = g.status === String(o.status).toUpperCase() ? g.reason : 'Next weekly review: ' + g.status.replace('_', '-') + '. ' + g.reason;
+    });
+    Tables.writeCols(t, ['trades', 'wins', 'losses', 'flats', 'winRatePct', 'avgNetPct', 'expectancyPct', 'profitFactor', 'maxDrawdownPct', 'alphaPct', 'avgWinPct', 'avgLossPct', 'avgHoldDays', 'openTrades', 'updatedAt', 'note'], 0);
+    StrategyBook._map = null;
+
+    var summary = this.paperSummary(rows, trades);
+    Secrets.props().setProperty('PAPER_SUMMARY', JSON.stringify(summary));
+    return summary;
+  },
+
+  /** Totals for the main paper account: closed and open trades, overall and per horizon. */
+  paperSummary: function (rows, trades) {
+    var cap = this.sizing().capital, self = this;
+    var main = trades.filter(function (x) { return x.track === 'main' && self.num(x.netPnl); });
+    var by = {}, total = 0;
+    main.forEach(function (x) { by[x.horizon] = (by[x.horizon] || 0) + x.netPnl; total += x.netPnl; });
+    var openN = 0, unreal = 0;
+    rows.forEach(function (r) {
+      if (r.status === 'ACTIVE' && (r.track || 'main') === 'main' && Number(r.paperQty) > 0) { openN++; if (self.num(r._unrealised)) unreal += r._unrealised; }
+    });
+    Object.keys(by).forEach(function (h) { by[h] = self.round(by[h]); });
+    return { capital: cap, closed: main.length, netPnl: this.round(total), returnPct: this.round(total / cap * 100, 2), byHorizon: by, open: openN, unrealisedPnl: this.round(unreal), at: new Date().toISOString(), start: Secrets.props().getProperty('PAPER_START') || '' };
+  },
+
+  /* ------------------------------ Reports ------------------------------ */
+
+  /** The closing summary's paper-trading lines for today. */
+  paperLines: function (today) {
+    var e = Notify.esc, self = this, rows = Tables.read('Alerts').rows, L = [];
+    var s = null;
+    try { s = JSON.parse(Secrets.props().getProperty('PAPER_SUMMARY') || 'null'); } catch (x) { s = null; }
+    var closedToday = rows.filter(function (r) {
+      return (r.track || 'main') === 'main' && r.status === 'CLOSED' && REVIEW_OUTCOMES.indexOf(r.outcome) >= 0 && r.direction !== 'EXIT' &&
+        r.closedAt instanceof Date && MarketCal.ymd(r.closedAt) === today && Number(r.paperQty) > 0;
+    });
+    var notTrig = rows.filter(function (r) { return (r.track || 'main') === 'main' && r.outcome === 'NOT_TRIGGERED' && r.closedAt instanceof Date && MarketCal.ymd(r.closedAt) === today; }).length;
+    L.push('<b>Paper trading</b> (virtual ' + Fmt.money(this.sizing().capital, 0) + ')');
+    if (closedToday.length) {
+      var net = 0, w = 0, l = 0;
+      closedToday.forEach(function (r) { net += Number(r.netPnl) || 0; if (Number(r.netPnl) > 0) w++; else if (Number(r.netPnl) < 0) l++; });
+      L.push('Closed today: ' + closedToday.length + ' · net ' + Fmt.money(self.round(net), 0) + ' (' + w + ' won, ' + l + ' lost, after charges)');
+      closedToday.slice(0, 8).forEach(function (r) {
+        L.push('• ' + (r.direction === 'SHORT' ? 'SHORT ' : '') + e(r.symbol) + ' ' + self.outcomeName(r.outcome) + ' ' + Fmt.pct(Number(r.netPct)) + ' (' + Fmt.money(Number(r.netPnl), 0) + ')');
+      });
+      if (closedToday.length > 8) L.push('… and ' + (closedToday.length - 8) + ' more in the PaperTrades sheet.');
+    } else {
+      L.push('Closed today: none.');
+    }
+    if (notTrig) L.push(notTrig + ' alert' + (notTrig > 1 ? 's' : '') + ' never reached the entry range (not counted).');
+    if (s) {
+      L.push('Open: ' + s.open + ' position' + (s.open === 1 ? '' : 's') + (s.open ? ', unrealised ' + Fmt.money(s.unrealisedPnl, 0) : '') + '.');
+      var parts = Object.keys(s.byHorizon).map(function (h) { return (AlertBook.HORIZON_NAMES[h] || h) + ' ' + Fmt.money(s.byHorizon[h], 0); });
+      L.push('Since start: ' + Fmt.money(s.netPnl, 0) + ' (' + Fmt.pct(s.returnPct) + ') from ' + s.closed + ' closed trade' + (s.closed === 1 ? '' : 's') + (parts.length ? ' · ' + parts.join(' · ') : '') + '.');
+    }
+    return L;
+  },
+
+  outcomeName: function (o) {
+    return { TARGET_HIT: 'target hit', STOP_HIT: 'stopped out', EXPIRED: 'expired', NOT_TRIGGERED: 'not triggered', EXIT_RIGHT: 'exit was right', EXIT_EARLY: 'exit was early', NO_DATA: 'no data' }[o] || o;
+  },
+
+  statusName: function (s) { return { PAPER: 'Paper', LIVE_READY: 'Live-ready', REJECTED: 'Rejected' }[s] || s; },
+
+  /** One strategy as two short lines for Telegram. */
+  strategyLines: function (st, m, g, current) {
+    var bits = [];
+    if (m.trades) {
+      bits.push('win ' + m.winRatePct + '%');
+      bits.push('avg ' + Fmt.pct(m.expectancyPct) + '/trade');
+      if (m.profitFactor !== null) bits.push('PF ' + m.profitFactor.toFixed(2));
+      if (m.maxDrawdownPct !== null) bits.push('DD ' + m.maxDrawdownPct.toFixed(1) + '%');
+      if (m.avgAlphaPct !== null) bits.push('vs Nifty ' + Fmt.pct(m.avgAlphaPct));
+    }
+    var icon = current === 'LIVE_READY' ? '✅' : current === 'REJECTED' ? '⛔' : '🧪';
+    return [icon + ' <b>' + Notify.esc(st.name) + '</b> · ' + this.statusName(current) + ' · ' + m.trades + '/' + this.rules().minTrades,
+      '   ' + (bits.length ? bits.join(' · ') : 'no closed paper trades yet')];
+  },
+
+  /**
+   * Saturday: refresh the numbers, apply Live-ready / Rejected decisions (a message for each change),
+   * and send the weekly report on Telegram and email.
+   */
+  weekly: function () {
+    var self = this, t = this.alerts(), rows = t.rows, trades = this.closedTrades(rows), rules = this.rules(), cap = this.sizing().capital;
+    // Numbers were refreshed at the last close; the decisions below use the closed trades directly.
+    var changes = this.graduation(trades, rules, cap);
+    var today = MarketCal.ymd(), weekAgo = Date.now() - 7 * 86400000;
+    var week = trades.filter(function (x) { return x.track === 'main' && x.exitT >= weekAgo; });
+    var wNet = 0, wWins = 0;
+    week.forEach(function (x) { if (self.num(x.netPnl)) wNet += x.netPnl; if (x.netPct > 0) wWins++; });
+    var s = null;
+    try { s = JSON.parse(Secrets.props().getProperty('PAPER_SUMMARY') || 'null'); } catch (x) { s = null; }
+    var L = ['📊 <b>Weekly report</b> · week to ' + Fmt.day(MarketCal.lastCompletedSession()), ''];
+    L.push('<b>Paper trading</b>: ' + week.length + ' trade' + (week.length === 1 ? '' : 's') + ' closed this week, ' + wWins + ' won, net ' + Fmt.money(this.round(wNet), 0) + ' after charges.');
+    if (s) L.push('Since start: ' + Fmt.money(s.netPnl, 0) + ' (' + Fmt.pct(s.returnPct) + ' of ' + Fmt.money(cap, 0) + '), ' + s.open + ' open.');
+    L.push(Market.line(Market.saved()));
+    L.push('', '<b>Strategies</b> (closed paper trades / ' + rules.minTrades + ' needed)');
+    var book = StrategyBook.load();
+    SRCore.STRATEGIES.forEach(function (st) {
+      var m = SRCore.metrics(self.window(trades.filter(function (x) { return x.strategy === st.id && x.track === 'main'; })), { capital: cap });
+      L = L.concat(self.strategyLines(st, m, null, book[st.id] ? book[st.id].status : 'PAPER'));
+    });
+    if (changes.length) {
+      L.push('', '<b>Status changes this week</b>');
+      changes.forEach(function (c) { L.push('• ' + Notify.esc(c.name) + ': ' + self.statusName(c.from) + ' → ' + self.statusName(c.to)); });
+    }
+    L = L.concat(this.filterCheckLines(trades, cap));
+    L.push('', 'Every number is from paper trades judged on real Angel One prices, after estimated Zerodha charges. Not investment advice.');
+    var text = L.join('\n');
+    Notify.safeTelegram(text);
+    if (Config.get('emailDigest')) { try { Notify.email('Weekly report ' + Fmt.day(today), Notify.htmlFromTelegram(text)); } catch (e) { ErrorLog.add('weeklyEmail', e); } }
+    this.saveReport('weekly', 'Weekly report ' + today, week.length + ' trades closed, net ' + this.round(wNet), { changes: changes, summary: s });
+    return { changes: changes.length, closedThisWeek: week.length };
+  },
+
+  /** Apply the Live-ready / Rejected rules; send a message for every change. Returns the changes. */
+  graduation: function (trades, rules, cap) {
+    var self = this, t = Tables.read('Strategies'), changes = [], now = new Date();
+    t.rows.forEach(function (o) {
+      var st = SRCore.strategy(String(o.id));
+      if (!st) return;
+      var m = SRCore.metrics(self.window(trades.filter(function (x) { return x.strategy === st.id && x.track === 'main'; })), { capital: cap });
+      var g = SRCore.graduate(m, rules), from = String(o.status || 'PAPER').toUpperCase();
+      o.statusReason = g.reason;
+      if (g.status === from) return;
+      o.status = g.status; o.statusSince = now;
+      var override = String(o.override || '').trim();
+      changes.push({ id: st.id, name: st.name, from: from, to: g.status, reason: g.reason, override: override });
+    });
+    Tables.writeCols(t, ['status', 'statusSince', 'statusReason'], 0);
+    StrategyBook._map = null;
+    changes.forEach(function (c) {
+      var head = c.to === 'LIVE_READY' ? '🎓 <b>' + Notify.esc(c.name) + ' is now LIVE-READY</b>'
+        : c.to === 'REJECTED' ? '⛔ <b>' + Notify.esc(c.name) + ' is now REJECTED</b>'
+        : (c.from === 'LIVE_READY' ? '↩️ <b>' + Notify.esc(c.name) + ' is back to PAPER</b>' : '🔄 <b>' + Notify.esc(c.name) + ' is back to PAPER</b>');
+      var tail = c.to === 'LIVE_READY' ? 'Its alerts now show this record. You still decide every trade yourself.'
+        : c.to === 'REJECTED' ? 'It keeps paper-trading silently, so it can recover. No more alerts from it on Telegram.'
+        : c.from === 'LIVE_READY' ? 'Its record has slipped, so its alerts are labelled PAPER again.' : 'It has recovered enough to send paper alerts again.';
+      Notify.safeTelegram(head + '\n' + Notify.esc(c.reason) + '\n' + tail + (c.override ? '\nNote: your override in the Strategies sheet (' + Notify.esc(c.override) + ') still decides how its alerts are labelled.' : ''));
+    });
+    return changes;
+  },
+
+  /** Did the regime filter help? Signals it blocked (tracked silently) against those it let through. */
+  filterCheckLines: function (trades, cap) {
+    var L = [], shadow = trades.filter(function (x) { return x.track === 'shadow'; });
+    if (!shadow.length) return L;
+    L.push('', '<b>Regime filter check</b> (signals the regime blocked, paper-tracked silently)');
+    ['INTRADAY', 'SWING', 'MEDIUM', 'LONG'].forEach(function (h) {
+      var sh = shadow.filter(function (x) { return x.horizon === h; });
+      if (!sh.length) return;
+      var mn = trades.filter(function (x) { return x.track === 'main' && x.horizon === h; });
+      var a = SRCore.metrics(sh, { capital: cap }), b = SRCore.metrics(mn, { capital: cap });
+      L.push((AlertBook.HORIZON_NAMES[h] || h) + ': blocked ' + a.trades + ' averaged ' + Fmt.pct(a.expectancyPct) + ' (win ' + a.winRatePct + '%)' +
+        (b.trades ? ' vs taken ' + b.trades + ' at ' + Fmt.pct(b.expectancyPct) + ' (win ' + b.winRatePct + '%)' : ''));
+    });
+    return L;
+  },
+
+  /** Day 30, 60 and 90 after paper trading began: a verdict for every strategy. Sent once each. */
+  readinessIfDue: function (today) {
+    var p = Secrets.props(), start = p.getProperty('PAPER_START');
+    if (!start) return null;
+    var days = Math.round((Date.parse(today + 'T12:00:00+05:30') - Date.parse(start + 'T12:00:00+05:30')) / 86400000);
+    var sent = (p.getProperty('READINESS_SENT') || '').split(',').filter(Boolean);
+    var due = [30, 60, 90].filter(function (d) { return days >= d && sent.indexOf(String(d)) < 0; });
+    if (!due.length) return null;
+    var milestone = due[due.length - 1]; // if several are overdue, send the latest one only
+    this.readiness(milestone);
+    p.setProperty('READINESS_SENT', sent.concat(due.map(String)).join(','));
+    return milestone;
+  },
+
+  readiness: function (dayN) {
+    var self = this, rows = Tables.read('Alerts').rows, trades = this.closedTrades(rows), rules = this.rules(), cap = this.sizing().capital;
+    var L = ['📋 <b>Readiness report · day ' + dayN + ' of paper trading</b>', ''];
+    var groups = { LIVE_READY: [], PAPER: [], REJECTED: [], MORE: [] };
+    SRCore.STRATEGIES.forEach(function (st) {
+      var m = SRCore.metrics(self.window(trades.filter(function (x) { return x.strategy === st.id && x.track === 'main'; })), { capital: cap });
+      var g = SRCore.graduate(m, rules);
+      var key = g.status === 'PAPER' && m.trades < rules.minTrades ? 'MORE' : g.status;
+      groups[key].push({ st: st, m: m, g: g });
+    });
+    var show = function (title, list) {
+      if (!list.length) return;
+      L.push('<b>' + title + '</b>');
+      list.forEach(function (x) { L = L.concat(self.strategyLines(x.st, x.m, x.g, x.g.status)); L.push('   ' + Notify.esc(x.g.reason)); });
+      L.push('');
+    };
+    show('Live-ready', groups.LIVE_READY);
+    show('Needs more data', groups.MORE);
+    show('Paper: enough trades, not good enough yet', groups.PAPER);
+    show('Rejected', groups.REJECTED);
+    L.push('Live-ready needs ' + rules.minTrades + '+ closed trades, a positive average after charges, profit factor ≥ ' + rules.minPF + ', drawdown ≤ ' + rules.maxDrawdownPct + '% and beating Nifty 50 over the same holding periods.');
+    L.push('Performance screen: https://sambadhyam.github.io/stock-radar/#/results (shows live numbers once the app is connected in Phase 4).');
+    var text = L.join('\n');
+    Notify.safeTelegram(text);
+    if (Config.get('emailDigest')) { try { Notify.email('Readiness report, day ' + dayN, Notify.htmlFromTelegram(text)); } catch (e) { ErrorLog.add('readinessEmail', e); } }
+    this.saveReport('readiness', 'Readiness report, day ' + dayN, groups.LIVE_READY.length + ' live-ready, ' + groups.REJECTED.length + ' rejected, ' + groups.MORE.length + ' need more data', {
+      day: dayN, verdicts: SRCore.STRATEGIES.map(function (st) {
+        var m = SRCore.metrics(self.window(trades.filter(function (x) { return x.strategy === st.id && x.track === 'main'; })), { capital: cap });
+        return { id: st.id, status: SRCore.graduate(m, rules).status, trades: m.trades, winRatePct: m.winRatePct, expectancyPct: m.expectancyPct, profitFactor: m.profitFactor };
+      }),
+    });
+    return text;
+  },
+
+  saveReport: function (type, title, summary, payload) {
+    try {
+      Tables.ensure('Reports', ['id', 'type', 'createdAt', 'title', 'summary', 'payload']);
+      var json = JSON.stringify(payload || {});
+      Store.append('Reports', [{ id: 'R' + Utilities.formatDate(new Date(), IST, 'yyyyMMdd-HHmm') + '-' + type, type: type, createdAt: new Date(), title: title, summary: summary, payload: json.length > 45000 ? json.slice(0, 45000) : json }]);
+    } catch (e) { ErrorLog.add('saveReport', e); }
+  },
+};
+
+/* ============================== Menu: update paper results ============================== */
+
+/** Stock Radar → Update paper results now. Judges alerts and refreshes the numbers outside market hours. */
+function updatePaperResults() {
+  var today = MarketCal.ymd();
+  if (MarketCal.marketState() === 'open') { Ui.alert('Paper results', 'This runs by itself after the close. Please try again after 15:30.'); return null; }
+  var t0 = Date.now(), out = { intraday: '', daily: null };
+  var r1 = Jobs.run('evaluateIntraday', function () { return Review.intraday(today, {}, t0 + 200000); }, { lock: true, wait: 10000 });
+  var r2 = Jobs.run('evaluateDaily', function () { return Review.daily(today); }, { lock: true, wait: 10000 });
+  out.intraday = r1; out.daily = r2;
+  var s = null;
+  try { s = JSON.parse(Secrets.props().getProperty('PAPER_SUMMARY') || 'null'); } catch (e) { s = null; }
+  Ui.alert('Paper results updated',
+    (r2 ? r2.judged + ' alerts checked with daily prices, ' + r2.checkpoints + ' checkpoints added.\n' : 'Could not update daily results (see ErrorLog).\n') +
+    (r1 === 'more' ? 'Some intraday alerts are left for the next run.\n' : '') +
+    (s ? '\nPaper account: ' + s.closed + ' closed trades, net ' + Fmt.money(s.netPnl, 0) + ' (' + Fmt.pct(s.returnPct) + '), ' + s.open + ' open.' : '') +
+    '\n\nDetails are in the PaperTrades, Metrics and Strategies sheets.');
+  return out;
+}

@@ -11,6 +11,7 @@ Use Chrome with **⋮ → Desktop site** ticked for every step.
 | [Engine.gs](Engine.gs) | `Engine` |
 | [Api.gs](Api.gs) | `Api` |
 | [Signals.gs](Signals.gs) | `Signals` (Phase 2) |
+| [Review.gs](Review.gs) | `Review` (Phase 3) |
 | [Core.gs](Core.gs) | `Core` (Phase 2; the same file as `core/core.js`) |
 | [appsscript.json](appsscript.json) | `appsscript.json` (required: India time and the exact permissions the engine may use) |
 
@@ -20,7 +21,7 @@ Use Chrome with **⋮ → Desktop site** ticked for every step.
 
 1. Open your **Stock Radar DB** sheet → **Extensions → Apps Script**.
 2. Rename the starting file: tap **⋮** next to `Code.gs` → **Rename** → type `Setup` → Enter.
-3. Add the other files: tap **+** next to **Files** → **Script**, name it `Data`. Repeat for `Engine`, `Api`, `Signals` and `Core`.
+3. Add the other files: tap **+** next to **Files** → **Script**, name it `Data`. Repeat for `Engine`, `Api`, `Signals`, `Review` and `Core`.
 4. Fill each file, one at a time:
    1. In another tab, open the file on GitHub (links in the table above).
    2. Tap the **copy icon** (two small squares) at the top right of the code. If you don't see it, tap **Raw**, then long-press → **Select all** → **Copy**.
@@ -57,6 +58,14 @@ You never paste keys into these files.
 
 Weekends and NSE holidays are skipped.
 
+**Every alert is judged automatically** (Phase 3):
+- Intraday alerts after the close, on 1-minute candles.
+- Swing, medium and long alerts after each close, on daily candles.
+- Each filled alert is a paper trade from your virtual capital (`paperCapital`, `riskPct`), after estimated Zerodha charges. The results go into the **Alerts**, **PaperTrades**, **Metrics**, **Strategies** and **Checkpoints** sheets.
+- The daily summary shows the paper results.
+- Every Saturday the weekly report decides which strategies are **Live-ready** or **Rejected**, with a message for each change.
+- On day 30, 60 and 90 a **readiness report** gives a verdict for every strategy.
+
 ---
 
 ## Permissions
@@ -90,6 +99,40 @@ Weekends and NSE holidays are skipped.
 7. **Stock Radar → 6. Load price history**, and allow the permissions (the Drive one says "only the specific Google Drive files you use with this app").
 
 Your daily schedule keeps running; there is no need to start it again.
+
+## Phase 3 update
+
+1. In Apps Script add a new file: **+** next to **Files** → **Script** → name it `Review`.
+2. Paste these six files over what is there (open the link, **Ctrl+A**, **Ctrl+C**; click in the Apps Script file, **Ctrl+A**, **Ctrl+V**):
+   [Review.gs](https://raw.githubusercontent.com/sambadhyam/stock-radar/main/apps-script/Review.gs) → `Review`,
+   [Core.gs](https://raw.githubusercontent.com/sambadhyam/stock-radar/main/apps-script/Core.gs) → `Core`,
+   [Signals.gs](https://raw.githubusercontent.com/sambadhyam/stock-radar/main/apps-script/Signals.gs) → `Signals`,
+   [Engine.gs](https://raw.githubusercontent.com/sambadhyam/stock-radar/main/apps-script/Engine.gs) → `Engine`,
+   [Data.gs](https://raw.githubusercontent.com/sambadhyam/stock-radar/main/apps-script/Data.gs) → `Data`,
+   [Setup.gs](https://raw.githubusercontent.com/sambadhyam/stock-radar/main/apps-script/Setup.gs) → `Setup`.
+   `Api.gs` and `appsscript.json` are unchanged.
+3. **Ctrl+S**, go back to the sheet and reload it.
+4. **Stock Radar → 1. Create sheets.** Adds the new columns, the **Metrics** sheet and three new settings. Nothing else changes.
+
+The schedule keeps running. The first results arrive with the next closing summary.
+
+## How alerts are judged
+
+| Outcome | Meaning |
+|---|---|
+| TARGET_HIT | The price reached the first target after the entry |
+| STOP_HIT | The price reached the stop first (if one candle touched both, the stop is assumed) |
+| EXPIRED | Neither, by the end of the alert's window; closed at the last price |
+| NOT_TRIGGERED | The price never came into the entry range (or opened beyond the stop first); not counted |
+| EXIT_RIGHT / EXIT_EARLY | Exit warnings for your holdings, 20 trading days later: the price fell, or rose |
+
+The entry works like a limit order inside the alert's entry range, at the price you could actually have got after the alert went out. Paper trades are sized from the virtual capital and are independent of each other, so every strategy gets a fair record.
+
+A strategy becomes **Live-ready** after at least 30 closed paper trades, using its latest 60. It also needs a positive average result after charges, a profit factor of 1.3 or more, a drawdown of 15% or less, and to beat Nifty 50 over the same holding periods. It is **Rejected** if its average result after charges is negative after 30 trades. A rejected strategy keeps paper-trading silently and can recover. You can set any status by hand in the **override** column of the Strategies sheet.
+
+**Signals blocked only by the market regime** (for example, swing buys in a Bear market) are logged with track "shadow" and judged the same way, without any message. They never count towards a strategy's record. The weekly report compares them with the signals that were taken, to show whether the regime filter helps. Switch this off with `shadowTracking` in Config.
+
+**Stock Radar → Update paper results now** runs the judging straight away outside market hours.
 
 ## Strategies and settings
 

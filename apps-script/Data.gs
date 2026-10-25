@@ -6,7 +6,7 @@
  * This file holds no keys. Keys are saved privately with  Stock Radar → 2. Set up keys.
  */
 
-var SR_VERSION = '0.3.0';
+var SR_VERSION = '0.4.0';
 var IST = 'Asia/Kolkata';
 
 /* =============================== Settings =============================== */
@@ -36,6 +36,9 @@ var CONFIG_DEFAULTS = [
   ['graduationMinTrades', 30, 'Closed paper trades needed before a strategy can become Live-ready'],
   ['graduationMinPF', 1.3, 'Profit factor needed for Live-ready'],
   ['graduationMaxDrawdownPct', 15, 'Largest paper drawdown allowed for Live-ready, in percent'],
+  ['graduationWindowTrades', 60, 'A strategy is judged on its latest this many closed paper trades (all of them until it has this many)'],
+  ['exitCheckDays', 20, 'Trading days after an exit warning at which it is judged (right if the price fell)'],
+  ['shadowTracking', true, 'Also paper-track, silently, the signals blocked only by the market regime, to test the regime filter'],
   ['useInstrumentMaster', false, 'Use Angel One\'s big instrument file for stock tokens (slow; symbol search is used when FALSE)'],
   ['intradayMaxSymbols', 60, 'Most stocks the intraday engine checks every 5 minutes'],
   ['maxTelegramAlertsPerRun', 5, 'Most alert messages sent from one scan; the rest are listed in one extra message'],

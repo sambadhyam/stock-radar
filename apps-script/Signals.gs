@@ -380,7 +380,7 @@ var Scans = {
     });
     if (!items.length) return { skipped: 'No intraday stocks pass the liquidity filter' };
     var res = Angel.candlesMany(items, 'FIVE_MINUTE', { deadline: deadline });
-    var signals = [], stale = 0, scanned = 0, lastEntry = Config.minutesOf('noEntriesAfter'), tracks = StrategyBook.tracks();
+    var signals = [], shadows = [], stale = 0, scanned = 0, lastEntry = Config.minutesOf('noEntriesAfter'), tracks = StrategyBook.tracks();
     Object.keys(res.data).forEach(function (sym) {
       var bars = res.data[sym].filter(function (b) { return b.t + 300000 <= nowMs - 15000; }); // completed bars only
       if (!bars.length) { stale++; return; }
@@ -392,9 +392,11 @@ var Scans = {
         nowMs: nowMs, lastEntryMinute: lastEntry, tracks: tracks,
       });
       signals = signals.concat(r.signals);
+      shadows = shadows.concat(r.shadow || []);
     });
-    var fresh = IntraSeen.filter(today, signals, nowMs);
+    var fresh = IntraSeen.filter(today, signals, nowMs, '');
     var out = AlertBook.publish(fresh, { nowMs: nowMs, source: 'Angel One 5-minute candles' });
+    if (Config.get('shadowTracking') !== false) AlertBook.publish(IntraSeen.filter(today, shadows, nowMs, 'S|'), { nowMs: nowMs, source: 'Angel One 5-minute candles', shadow: true });
     Health.log('intradayScan', 'angel', scanned > 0, Date.now() - t0, scanned,
       scanned + ' scanned, ' + stale + ' without fresh bars, ' + Object.keys(res.failed).length + ' failed, ' + res.left.length + ' left for time; ' + fresh.length + ' new signals', 30);
     if (!scanned && items.length) throw new Error('No fresh 5-minute candles for any intraday stock (' + Object.keys(res.failed).length + ' failed, ' + stale + ' stale)');
@@ -471,7 +473,7 @@ var Scans = {
     mediumU.forEach(function (s) { if (series[s] && series[s].length) mediumSeries[s] = series[s]; });
     var rs = SRCore.rsRanks(mediumSeries, nifty);
 
-    var signals = [], stale = 0, scanned = 0;
+    var signals = [], shadows = [], stale = 0, scanned = 0;
     Object.keys(syms).forEach(function (s) {
       var k = series[s];
       if (!k || !k.length) return;
@@ -489,9 +491,11 @@ var Scans = {
       });
       r.signals.forEach(function (sig) { if (sig.direction === 'EXIT') sig.holdingQty = Number(hold[s].qty) || 0; });
       signals = signals.concat(r.signals);
+      shadows = shadows.concat(r.shadow || []);
     });
     var fresh = AlertBook.withoutRepeats(signals, P);
     var out = AlertBook.publish(fresh, { nowMs: MarketCal.now().getTime(), source: 'Angel One daily candles', day: day });
+    if (Config.get('shadowTracking') !== false) AlertBook.publish(AlertBook.withoutRepeats(shadows, P), { nowMs: MarketCal.now().getTime(), source: 'Angel One daily candles', shadow: true });
     Health.log('endOfDay', 'scan', true, Date.now() - t0, scanned, scanned + ' stocks scanned, ' + stale + ' without today\'s candle, ' + signals.length + ' signals, ' + fresh.length + ' new');
     return { scanned: scanned, stale: stale, signals: fresh.length, logged: out.logged, sent: out.sent, regime: reg };
   },
@@ -512,17 +516,18 @@ var IntraSeen = {
     try { s = JSON.parse(Secrets.props().getProperty(this.KEY) || 'null'); } catch (e) { s = null; }
     return s && s.day === today ? s : { day: today, k: {} };
   },
-  filter: function (today, signals, nowMs) {
+  filter: function (today, signals, nowMs, prefix) {
     var s = this.load(today), cool = (Number(Config.get('alertCooldownMinutes')) || 60) * 60000, out = [];
+    prefix = prefix || '';
     signals.forEach(function (sig) {
-      var full = sig.symbol + '|' + sig.strategy + '|' + sig.direction, pair = sig.symbol + '|' + sig.strategy;
+      var full = prefix + sig.symbol + '|' + sig.strategy + '|' + sig.direction, pair = prefix + sig.symbol + '|' + sig.strategy;
       if (s.k[full]) return;
       if (s.k[pair] && nowMs - s.k[pair] < cool) return;
       s.k[full] = nowMs; s.k[pair] = nowMs;
       out.push(sig);
     });
     var json = JSON.stringify(s);
-    if (json.length > 8500) { s.k = {}; out.forEach(function (sig) { s.k[sig.symbol + '|' + sig.strategy + '|' + sig.direction] = nowMs; }); json = JSON.stringify(s); }
+    if (json.length > 8500) { s.k = {}; out.forEach(function (sig) { s.k[prefix + sig.symbol + '|' + sig.strategy + '|' + sig.direction] = nowMs; }); json = JSON.stringify(s); }
     Secrets.props().setProperty(this.KEY, json);
     return out;
   },
@@ -531,7 +536,7 @@ var IntraSeen = {
 /* ============================== Alerts log and messages ============================== */
 
 var AlertBook = {
-  EXTRA_HEADERS: ['qty', 'window', 'telegram'],
+  EXTRA_HEADERS: ['qty', 'window', 'telegram', 'track', 'fillPrice', 'exitPrice', 'paperQty', 'grossPnl', 'charges', 'netPnl', 'niftyPct', 'alphaPct', 'holdDays', 'evaluatedAt'],
   HORIZON_NAMES: { INTRADAY: 'Intraday', SWING: 'Swing', MEDIUM: 'Medium term', LONG: 'Long term' },
 
   ensureHeaders: function () {
@@ -548,9 +553,9 @@ var AlertBook = {
     if (!sh || sh.getLastRow() < 2) return [];
     var hdr = Store.headers(sh), n = Math.min(maxRows || 3000, sh.getLastRow() - 1), start = sh.getLastRow() - n + 1;
     var col = function (h) { return hdr.indexOf(h); };
-    var iC = col('createdAt'), iS = col('symbol'), iSt = col('strategy'), iD = col('direction'), iH = col('horizon');
+    var iC = col('createdAt'), iS = col('symbol'), iSt = col('strategy'), iD = col('direction'), iH = col('horizon'), iT = col('track');
     return sh.getRange(start, 1, n, hdr.length).getValues().map(function (r) {
-      return { createdAt: r[iC] instanceof Date ? r[iC].getTime() : Date.parse(r[iC]) || 0, symbol: String(r[iS]), strategy: String(r[iSt]), direction: String(r[iD]), horizon: String(r[iH]) };
+      return { createdAt: r[iC] instanceof Date ? r[iC].getTime() : Date.parse(r[iC]) || 0, symbol: String(r[iS]), strategy: String(r[iSt]), direction: String(r[iD]), horizon: String(r[iH]), track: iT >= 0 && r[iT] ? String(r[iT]) : 'main' };
     });
   },
 
@@ -558,10 +563,10 @@ var AlertBook = {
   withoutRepeats: function (signals, P) {
     if (!signals.length) return [];
     var last = {}, now = MarketCal.now().getTime();
-    this.recent(3000).forEach(function (a) { var k = a.symbol + '|' + a.strategy; if (!last[k] || a.createdAt > last[k]) last[k] = a.createdAt; });
+    this.recent(3000).forEach(function (a) { var k = a.symbol + '|' + a.strategy + '|' + a.track; if (!last[k] || a.createdAt > last[k]) last[k] = a.createdAt; });
     return signals.filter(function (sig) {
       var days = sig.strategy === 'holding-guard' ? P['guard.cooldownDays'] : sig.horizon === 'SWING' ? P['swing.cooldownDays'] : sig.horizon === 'MEDIUM' ? P['medium.cooldownDays'] : P['long.cooldownDays'];
-      var prev = last[sig.symbol + '|' + sig.strategy];
+      var prev = last[sig.symbol + '|' + sig.strategy + '|' + (sig.shadow ? 'shadow' : 'main')];
       return !(prev && now - prev < days * 86400000);
     });
   },
@@ -595,17 +600,19 @@ var AlertBook = {
       var st = book[sig.strategy] || { status: 'PAPER', track: null };
       var size = sig.direction === 'EXIT' ? { qty: sig.holdingQty || 0 } : SRCore.positionSize(cap, risk, sig.entry, sig.stop, maxPer);
       var win = self.window(sig, nowMs);
+      var isShadow = !!(info.shadow || sig.shadow);
       var row = {
-        id: 'A' + stamp + '-' + sig.symbol + '-' + sig.strategy + (sig.direction === 'SHORT' ? '-S' : sig.direction === 'EXIT' ? '-X' : ''),
+        id: 'A' + stamp + '-' + sig.symbol + '-' + sig.strategy + (sig.direction === 'SHORT' ? '-S' : sig.direction === 'EXIT' ? '-X' : '') + (isShadow ? '-H' : ''),
         createdAt: new Date(nowMs), symbol: sig.symbol, horizon: sig.horizon, strategy: sig.strategy, strategyStatus: st.status,
         direction: sig.direction, entryLow: sig.entryLow, entryHigh: sig.entryHigh, stop: sig.stop, target1: sig.target1, target2: sig.target2,
         rr: sig.rr, confidence: sig.confidence, reasons: sig.reasons.join(' | '), regime: regime ? regime.state : '',
         source: info.source + (sig.barEnd ? ' to ' + sig.barEnd : '') + ', ' + Utilities.formatDate(new Date(sig.barTime), IST, 'd MMM'),
         validTill: win.till, status: 'OPEN', notes: (sig.riskPct ? 'Stop ' + sig.riskPct + '% away. ' : '') + (sig.tradedValueCr ? 'Avg traded value ₹' + sig.tradedValueCr + ' cr.' : ''),
-        qty: size.qty, window: win.text, telegram: '',
+        qty: size.qty, window: win.text, telegram: '', track: isShadow ? 'shadow' : 'main',
       };
       var why = '';
-      if (!tgOn) why = 'Telegram off';
+      if (isShadow) why = 'blocked by the ' + SRCore.regimeName(regime ? regime.state : 'UNKNOWN') + ' regime, tracked silently';
+      else if (!tgOn) why = 'Telegram off';
       else if (st.status === 'REJECTED') why = 'strategy rejected (kept as paper only)';
       else if (st.status === 'PAPER' && !paperOk) why = 'paper alerts off';
       else if (sent >= perRun || sentToday >= perDay) why = 'over the message limit';
