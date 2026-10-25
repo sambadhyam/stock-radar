@@ -1069,22 +1069,27 @@ var Constituents = {
   HOSTS: ['https://niftyindices.com/IndexConstituent/', 'https://archives.nseindia.com/content/indices/', 'https://nsearchives.nseindia.com/content/indices/'],
   MIN: { NIFTY50: 45, NIFTY200: 180, NIFTY500: 450 },
 
-  /** {rows:[{symbol, name, industry}], source, error} — online first, then an imported sheet. */
+  _blocked: false, // set once NSE's servers stop answering, so later lists don't wait again
+
+  /** {rows:[{symbol, name, industry}], source, error} — an imported sheet first, then NSE online. */
   get: function (ix) {
+    var imported = this.fromSheet(ix);
+    if (imported.rows.length >= this.MIN[ix]) return { rows: imported.rows, source: 'sheet "' + imported.name + '"' };
+    if (this._blocked) return { rows: [], source: '', error: 'NSE did not answer Google\'s servers earlier in this run' };
     var errors = [];
     for (var i = 0; i < this.HOSTS.length; i++) {
-      var url = this.HOSTS[i] + this.FILES[ix], host = url.split('/')[2];
-      var res = Http.request(url, { method: 'get', headers: { Accept: 'text/csv,*/*' } }, { retries: 1 });
+      var url = this.HOSTS[i] + this.FILES[ix], host = url.split('/')[2], t0 = Date.now();
+      var res = Http.request(url, { method: 'get', headers: { Accept: 'text/csv,*/*' } }, { retries: 0 });
       if (res.code === 200) {
-        var rows = this.parse(Utilities.parseCsv(String(res.text).replace(/^﻿/, '')));
+        var rows = this.parse(Utilities.parseCsv(String(res.text).replace(/^\uFEFF/, '')));
         if (rows.length >= this.MIN[ix]) return { rows: rows, source: host };
         errors.push(host + ' sent only ' + rows.length + ' rows');
       } else {
         errors.push(host + (res.code ? ' HTTP ' + res.code : ' unreachable'));
       }
+      if (Date.now() - t0 > 15000) { this._blocked = true; break; } // a slow host means NSE is blocking us; stop waiting
     }
-    var imported = this.fromSheet(ix);
-    if (imported.rows.length >= this.MIN[ix]) return { rows: imported.rows, source: 'sheet "' + imported.name + '"' };
+    if (errors.length === this.HOSTS.length || this._blocked) this._blocked = true;
     return { rows: [], source: '', error: errors.join('; ') };
   },
 
