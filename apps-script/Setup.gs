@@ -391,6 +391,19 @@ var Ui = {
 };
 
 var Setup = {
+  /** "412 of 499" plus the first few stocks still missing a code. */
+  tokenLine: function () {
+    var all = SymbolsDb.load(), total = 0, missing = [];
+    Object.keys(all).forEach(function (k) {
+      if (all[k].type === 'INDEX') return;
+      total++;
+      if (!all[k].angelToken) missing.push(k);
+    });
+    var line = (total - missing.length) + ' of ' + total;
+    if (missing.length) line += '. Missing: ' + missing.slice(0, 15).join(', ') + (missing.length > 15 ? ' and ' + (missing.length - 15) + ' more' : '');
+    return line;
+  },
+
   CSS: 'body{font-family:Roboto,Arial,sans-serif;margin:0;padding:2px 2px 18px;color:#0E242B;font-size:14px;line-height:1.45}' +
     'h3{font-size:15px;margin:16px 0 6px}p{margin:0 0 10px}.muted{color:#58727A}' +
     '.f{margin:0 0 14px}label{display:flex;justify-content:space-between;gap:8px;font-weight:600;margin-bottom:4px}' +
@@ -458,6 +471,7 @@ var Setup = {
       li('Engine version', SR_VERSION) +
       li('Keys', keyLine) +
       li('Stocks loaded', String(SymbolsDb.count())) +
+      li('Stocks with an Angel One code', Setup.tokenLine()) +
       li('Daily schedule', sched.kickoffs ? 'On' + (sched.tickRunning ? ', running now' : ', waiting for the next trading morning') : 'Off') +
       li('Angel One session', sess.jwt && sess.day === today ? 'Logged in today at ' + Utilities.formatDate(new Date(sess.at), IST, 'HH:mm') : 'Not logged in today') +
       li('Market', MarketCal.marketState() + ' (' + Fmt.day(today) + ')') +
