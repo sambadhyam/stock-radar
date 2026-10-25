@@ -287,7 +287,7 @@ test('stock lists: rebuild from NSE lists and the instrument list', () => {
   const r = G.SymbolsDb.rebuild();
   eq(r.lists.NIFTY500.count, 500);
   eq(r.lists.NIFTY50.source, 'niftyindices.com');
-  eq(r.tokenSource, 'Angel One instrument list');
+  eq(r.tokenSource, 'symbol search');
   eq(r.tokensMissing.length, 0, 'all tokens');
   const rows = sim.ss.getSheetByName('Symbols').dump();
   eq(rows.length - 1, 500 + 3 + G.INDEX_LIST.length, 'stocks + ETFs + indices');
@@ -308,6 +308,7 @@ test('stock lists: falls back to symbol search and to an imported sheet', () => 
   ok(/sheet/.test(r.lists.NIFTY50.source), r.lists.NIFTY50.source);
   eq(r.lists.NIFTY500.count, 0, 'unavailable list reported');
   ok(/symbol search/.test(r.tokenSource), r.tokenSource);
+  ok(sim.state.requests.some((q) => q.url.includes('searchScrip')), 'search used');
   eq(r.tokensFound, 50 + 3 + 0 + 0, 'tokens via search for Nifty 50 + ETFs (watchlist already in Nifty 50)');
   ok(w.telegram.length === 0, 'no telegram noise');
 });
@@ -371,9 +372,10 @@ test('a full trading day: brief at 08:50, snapshots, summary after 16:00, then t
   G.Schedule.install();
   const tickAt = (hhmm) => { G.MarketCal._now = at('2026-10-26T' + hhmm + ':00+05:30'); G.Config._cache = null; G.engineTick(); };
   tickAt('08:30'); eq(w.telegram.length, 0, 'nothing before 08:50');
+  const loginsBefore = w.loginCount;
   tickAt('08:50'); eq(w.telegram.length, 1, 'pre-market brief');
   ok(/Pre-market check/.test(w.telegram[0]) && /Nifty 50 closed at 25,410\.20/.test(w.telegram[0]), w.telegram[0]);
-  eq(w.loginCount, 1, 'fresh login for the day');
+  eq(w.loginCount - loginsBefore, 1, 'fresh login for the day');
   tickAt('08:51'); eq(w.telegram.length, 1, 'brief sent once');
   const q0 = w.quoteCalls;
   tickAt('09:15'); tickAt('09:16'); tickAt('09:20');

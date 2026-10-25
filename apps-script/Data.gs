@@ -39,6 +39,7 @@ var CONFIG_DEFAULTS = [
   ['graduationMinTrades', 30, 'Closed paper trades needed before a strategy can become Live-ready'],
   ['graduationMinPF', 1.3, 'Profit factor needed for Live-ready'],
   ['graduationMaxDrawdownPct', 15, 'Largest paper drawdown allowed for Live-ready, in percent'],
+  ['useInstrumentMaster', false, 'Use Angel One\'s big instrument file for stock tokens (slow; symbol search is used when FALSE)'],
   ['heartbeatMinutes', 5, 'How often the engine records a market snapshot during the session'],
   ['muhuratTrading', false, 'Run the engine in special weekend Muhurat sessions'],
   ['chargeBrokerageIntradayPct', 0.03, 'Zerodha intraday brokerage, percent per executed order'],
@@ -996,13 +997,14 @@ var SymbolsDb = {
     Config.symbols('watchlist').forEach(function (s) { if (!all[s]) all[s] = SymbolsDb.newRow(s, existing[s] ? existing[s].name : s, 'EQ', existing[s] ? existing[s].sector : ''); });
     report.stocks = Object.keys(all).filter(function (s) { return all[s].type === 'EQ'; }).length;
 
-    // Tokens: the instrument list first, then symbols already known, then search.
+    // Tokens: keep the ones found before, then look up the rest with fast parallel searches.
+    // The big instrument file is only used when useInstrumentMaster is TRUE in Config (it can be too slow).
     var master = null;
-    try {
-      master = InstrumentMaster.nseEquity();
-      report.tokenSource = 'Angel One instrument list';
-    } catch (e) {
-      report.tokenSource = 'symbol search (instrument list unavailable: ' + e.message + ')';
+    if (Config.get('useInstrumentMaster')) {
+      try { master = InstrumentMaster.nseEquity(); report.tokenSource = 'Angel One instrument list'; }
+      catch (e) { report.tokenSource = 'symbol search (instrument list unavailable: ' + e.message + ')'; }
+    } else {
+      report.tokenSource = 'symbol search';
     }
     var needSearch = [];
     Object.keys(all).forEach(function (s) {
@@ -1012,28 +1014,48 @@ var SymbolsDb = {
       else if (existing[s] && existing[s].angelToken) { row.angelToken = String(existing[s].angelToken); row.angelSymbol = existing[s].angelSymbol; }
       else needSearch.push(s);
     });
+
+    var order = { ETF: 0, EQ: 1 };
+    var indexRows = INDEX_LIST.map(function (r) {
+      return { symbol: r[0], name: r[1], type: 'INDEX', angelToken: r[2], angelSymbol: r[1], google: r[3], yahoo: r[4], sector: 'Index', nifty50: false, nifty200: false, nifty500: false, updatedAt: new Date() };
+    });
+    var save = function () {
+      var list = Object.keys(all).map(function (s) { return all[s]; }).sort(function (a, b) {
+        return (order[a.type] - order[b.type]) || (a.symbol < b.symbol ? -1 : 1);
+      });
+      Store.replaceAll('Symbols', indexRows.concat(list));
+      return list;
+    };
+    save(); // the lists are saved even if the token search is cut short
+
     if (needSearch.length && Angel.configured()) {
-      for (var i = 0; i < needSearch.length; i++) {
-        if (Date.now() - t0 > 270000) { report.tokensMissing = report.tokensMissing.concat(needSearch.slice(i)); break; } // stay inside the 6-minute limit
-        try {
-          var hit = Angel.findToken(needSearch[i]);
-          if (hit) { all[needSearch[i]].angelToken = hit.token; all[needSearch[i]].angelSymbol = hit.angelSymbol; }
-          else report.tokensMissing.push(needSearch[i]);
-        } catch (e) { report.tokensMissing.push(needSearch[i]); }
-        Utilities.sleep(130);
+      var jwt = Angel.login(false);
+      var batch = 8; // Angel One allows 10 searches a second
+      for (var i = 0; i < needSearch.length; i += batch) {
+        if (Date.now() - t0 > 200000) { report.tokensMissing = report.tokensMissing.concat(needSearch.slice(i)); break; } // stay well inside the 6-minute limit
+        var group = needSearch.slice(i, i + batch);
+        var reqs = group.map(function (sym) {
+          return { url: Angel.BASE + Angel.ROUTES.search, method: 'post', contentType: 'application/json', headers: Angel.headers(jwt), payload: JSON.stringify({ exchange: 'NSE', searchscrip: sym }), muteHttpExceptions: true };
+        });
+        var resps = [];
+        try { resps = UrlFetchApp.fetchAll(reqs); } catch (e) { resps = []; }
+        group.forEach(function (sym, k) {
+          var hit = null;
+          try {
+            var j = JSON.parse(resps[k].getContentText());
+            var list = (j && j.status && j.data) || [];
+            hit = list.filter(function (r) { return r.tradingsymbol === sym + '-EQ'; })[0] || list.filter(function (r) { return r.tradingsymbol === sym + '-BE'; })[0] || null;
+          } catch (e) { hit = null; }
+          if (hit) { all[sym].angelToken = String(hit.symboltoken); all[sym].angelSymbol = hit.tradingsymbol; }
+          else report.tokensMissing.push(sym);
+        });
+        if ((i / batch) % 10 === 9) save(); // save progress now and then
+        Utilities.sleep(1000);
       }
     } else if (needSearch.length) {
       report.tokensMissing = needSearch;
     }
-
-    var order = { ETF: 0, EQ: 1 };
-    var rows = Object.keys(all).map(function (s) { return all[s]; }).sort(function (a, b) {
-      return (order[a.type] - order[b.type]) || (a.symbol < b.symbol ? -1 : 1);
-    });
-    var indexRows = INDEX_LIST.map(function (r) {
-      return { symbol: r[0], name: r[1], type: 'INDEX', angelToken: r[2], angelSymbol: r[1], google: r[3], yahoo: r[4], sector: 'Index', nifty50: false, nifty200: false, nifty500: false, updatedAt: new Date() };
-    });
-    Store.replaceAll('Symbols', indexRows.concat(rows));
+    var rows = save();
     this._map = null;
     report.tokensFound = rows.filter(function (r) { return r.angelToken; }).length;
     report.seconds = Math.round((Date.now() - t0) / 1000);

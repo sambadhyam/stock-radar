@@ -231,6 +231,7 @@ export function createSim({ files, order }) {
       },
     },
     UrlFetchApp: {
+      fetchAll: (reqs) => reqs.map((r) => sandbox.UrlFetchApp.fetch(r.url, r)),
       fetch: (url, opts = {}) => {
         state.requests.push({ url, opts });
         const r = state.fetch(url, opts);
