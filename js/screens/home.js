@@ -5,6 +5,7 @@ import { sectionHead, alertRow, trackStrip, stripLegend, horizonTag, statusChip,
 import { equityChart } from '../charts.js';
 import { openAlert } from './alerts.js';
 import { openStrategy } from './results.js';
+import { dataStatus, refresh } from '../data.js';
 
 export function render({ data }) {
   const m = data.market;
@@ -21,11 +22,13 @@ export function render({ data }) {
       h('span', null, fmt.longDate(Date.now())),
       h('span', { class: 'mkt-state' + (state === 'open' ? ' open' : '') }, t(stateKey)),
       data.isDemo ? h('span', { class: 'chip sample' }, t('common.sample')) : null),
-    h('h1', { class: 'hero-title', id: 'hero-title' }, t('regime.' + m.regime)),
+    h('h1', { class: 'hero-title', id: 'hero-title' }, t('regime.' + (m.regime || 'unknown'))),
+    !data.isDemo && m.reasons && m.reasons.length ? h('p', { class: 'sec-note', style: { marginTop: '4px' } }, m.reasons.join(' ')) : null,
+    data.isDemo ? null : freshness(),
     h('dl', { class: 'mkt' },
       h('dt', null, t('home.nifty')), h('dd', { class: 'v num' }, fmt.num(m.nifty)), h('dd', { class: 'c num ' + tone(m.niftyChg) }, fmt.pct(m.niftyChg)),
       h('dt', null, t('home.vix')), h('dd', { class: 'v num' }, fmt.num(m.vix)), h('dd', { class: 'c num ' + tone(-m.vixChg) }, fmt.pct(m.vixChg)),
-      h('dt', null, t('home.breadth')), h('dd', { class: 'v num' }, t('home.breadthValue', { pct: m.breadth })), h('dd', { class: 'c' })));
+      h('dt', null, t('home.breadth')), h('dd', { class: 'v num' }, m.breadth != null ? t('home.breadthValue', { pct: m.breadth }) : '—'), h('dd', { class: 'c' })));
 
   const signals = h('section', { class: 'sec' },
     sectionHead(signalsTitle, { count: today.length, link: { href: '#/alerts', label: t('common.seeAll') } }),
@@ -60,7 +63,7 @@ export function render({ data }) {
     stripLegend());
 
   const e = data.engine;
-  const engine = h('section', { class: 'sec' },
+  const engine = !data.isDemo ? liveEngine(e) : h('section', { class: 'sec' },
     sectionHead(t('home.engine')),
     h('div', { class: 'health' },
       h('div', { class: 'health-item ok' }, h('i'),
@@ -70,4 +73,29 @@ export function render({ data }) {
         h('span', null, f.name, ' ', h('span', { class: 'faint' }, t(f.state === 'ok' ? 'home.fallbackReady' : 'home.fallbackOff')))))));
 
   return h('div', null, data.isDemo ? previewBanner() : null, hero, signals, paper, track, engine);
+}
+
+/** "Updated 16:05" with a refresh button, or what went wrong on the last try. */
+function freshness() {
+  const st = dataStatus();
+  const when = st.updatedAt ? `${fmt.dayMonth(st.updatedAt)} ${fmt.time(st.updatedAt)}` : '—';
+  const label = st.loading ? t('home.refreshing') : st.error ? (st.kind === 'offline' ? t('home.offline', { time: when }) : t('home.loadFail', { why: st.error })) : t('home.updated', { time: when });
+  return h('p', { class: 'stat-line', style: { marginTop: '6px' } },
+    h('span', { class: st.error ? 'loss' : 'faint' }, label),
+    st.loading ? null : h('button', { type: 'button', class: 'btn btn-ghost', style: { minHeight: '32px', padding: '0 12px' }, onclick: () => refresh() }, t('home.refresh')));
+}
+
+/** Engine health from the real job records: each run's last result and time. */
+function liveEngine(e) {
+  const items = (e.jobs || []).map((j) => h('div', { class: 'health-item ' + (j.ok ? 'ok' : 'off') }, h('i'),
+    h('span', null, h('b', null, j.name), h('br'),
+      h('span', { class: j.ok ? 'faint' : 'loss' }, (j.ok ? t('home.jobOk', { time: j.at ? `${fmt.dayMonth(j.at)} ${fmt.time(j.at)}` : '—' }) : t('home.jobFail', { time: j.at ? `${fmt.dayMonth(j.at)} ${fmt.time(j.at)}` : '—' }) + (j.error ? ' · ' + j.error : ''))))));
+  return h('section', { class: 'sec' },
+    sectionHead(t('home.engine')),
+    h('div', { class: 'health' },
+      h('div', { class: 'health-item ok' }, h('i'),
+        h('span', null, h('b', null, t('home.engineSource', { source: e.source })), h('br'),
+          e.lastCheck ? t('home.lastCheck', { time: `${fmt.dayMonth(e.lastCheck)} ${fmt.time(e.lastCheck)}` }) : t('home.noCheck'))),
+      ...(items.length ? items : [h('p', { class: 'sec-note' }, t('home.noJobs'))])),
+    e.schedule === false ? h('p', { class: 'note loss' }, t('home.scheduleOff')) : null);
 }

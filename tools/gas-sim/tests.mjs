@@ -151,6 +151,11 @@ function world(sim, opts = {}) {
       return { code: 200, body: master() };
     }
     if (url.includes('finance.yahoo.com')) return { code: 429, body: 'Too Many Requests' };
+    if (url.startsWith('https://news.google.com/rss/search')) {
+      w.newsCalls = (w.newsCalls || 0) + 1;
+      const item = (i) => `<item><title><![CDATA[Headline ${i} &amp; more]]></title><link>https://news.google.com/rss/articles/abc${i}</link><pubDate>Mon, 26 Oct 2026 0${i}:00:00 GMT</pubDate><source url="https://example.com">Paper ${i}</source></item>`;
+      return { code: 200, body: '<?xml version="1.0"?><rss><channel>' + [1, 2, 3].map(item).join('') + '<item><title>No link</title><link>javascript:alert(1)</link></item></channel></rss>' };
+    }
     return { code: 404, body: 'no route for ' + url };
   };
   sim.state.gfValues = {
@@ -175,7 +180,7 @@ test('files load in any order and the menu is created', () => {
   const { sim, G } = fresh();
   sim.state.uiAvailable = true;
   G.onOpen();
-  eq(sim.state.menu.items.length, 10, 'menu items');
+  eq(sim.state.menu.items.length, 12, 'menu items');
   eq(sim.state.menu.items[0][1], 'menuCreateSheets');
 });
 
@@ -940,6 +945,132 @@ test('menu: update paper results now', () => {
   G.MarketCal._now = at('2026-10-26T11:00:00+05:30');
   G.updatePaperResults();
   ok(sim.state.alerts.some((x) => /after 15:30/.test(x.msg)), 'not during market hours');
+});
+
+// =================== Phase 4: the Web App API ===================
+
+const post = (G, body) => JSON.parse(G.doPost({ postData: { contents: JSON.stringify(body) } }).getContent());
+
+/** A world after one trading day with an intraday alert judged and a swing scan run. */
+function dayAfter() {
+  const day = '2026-10-26';
+  const env = marketWorld({ end: day, intra: { [TOKENS.TCS]: SC.intraday.orb() }, minute: { [TOKENS.TCS]: minuteDay(day, 101.1, '09:47', 0.02) }, daily: { [TOKENS.RELIANCE]: SC.daily['base-breakout']() } });
+  const { G } = env;
+  G.MarketCal._now = at('2026-10-25T21:00:00+05:30');
+  G.loadHistory();
+  G.Schedule.install();
+  for (const t of ['08:50', '09:41', '09:46', '12:00', '15:10', '16:00']) tickAtDay(G, day, t);
+  G.MarketCal._now = at('2026-10-26T18:00:00+05:30');
+  return env;
+}
+
+test('web app: nothing without the token; ping and a bundle in the app\'s own shape with it', () => {
+  const { G, sim, w } = dayAfter();
+  const token = sim.state.props.get('APP_TOKEN');
+  eq(post(G, { a: 'bundle' }).ok, false, 'no token');
+  eq(post(G, { a: 'bundle', t: token.slice(0, -1) + 'x' }).ok, false, 'wrong token');
+  ok(/Not authorised/.test(post(G, { a: 'ping', t: 'nope' }).error));
+  const ping = post(G, { a: 'ping', t: token });
+  eq(ping.ok, true); eq(ping.data.version, G.SR_VERSION);
+  ok(/running/.test(G.doGet().getContent()), 'GET only says it is running');
+  const raw = G.doPost({ postData: { contents: JSON.stringify({ a: 'bundle', t: token }) } });
+  eq(raw.getMimeType(), 'application/json');
+  const b = JSON.parse(raw.getContent()).data;
+  eq(b.isDemo, false); eq(b.session, '2026-10-26');
+  ok(['bull', 'neutral', 'bear', 'volatile', 'unknown'].includes(b.market.regime) && b.market.nifty > 0 && Array.isArray(b.market.reasons), JSON.stringify(b.market));
+  eq(b.strategies.length, 13);
+  const orb = b.strategies.find((x) => x.id === 'orb');
+  eq(orb.outcomes, 'W'); eq(orb.trades, 1); eq(orb.status, 'paper'); eq(orb.horizon, 'intraday'); eq(orb.win, 100);
+  const tcs = b.alerts.find((a) => a.symbol === 'TCS');
+  ok(tcs && tcs.dir === 'buy' && tcs.horizon === 'intraday' && tcs.targets.length >= 1 && tcs.entryLo < tcs.entryHi && tcs.why.length >= 2 && tcs.time > 0, JSON.stringify(tcs));
+  eq(tcs.outcome.state, 'target'); ok(tcs.outcome.pct > 0); eq(tcs.status, 'paper');
+  ok(b.alerts.some((a) => a.symbol === 'RELIANCE' && a.horizon === 'swing'), 'swing alert from the close');
+  ok(b.alerts.every((a) => !/-H$/.test(a.id)), 'no shadow alerts in the app');
+  ok(b.paper.start === 100000 && b.paper.value > 100000 && b.paper.curve.length >= 2 && b.paper.closed.length === 1 && b.paper.closed[0].state === 'target', JSON.stringify(b.paper).slice(0, 400));
+  ok(b.paper.open.some((o) => o.symbol === 'RELIANCE') === false, 'swing trade not filled yet');
+  ok(b.engine.jobs.some((j) => j.name === 'Intraday scan' && j.ok), JSON.stringify(b.engine));
+  ok(Array.isArray(b.scan.medium) && Array.isArray(b.scan.swing) && b.scan.etfs.length === 3, JSON.stringify(b.scan).slice(0, 300));
+  ok(b.scan.medium.length > 0 && b.scan.medium.every((r) => r.score >= 0 && r.score <= 100 && r.line), 'medium list built at the close');
+  eq(b.settings.riskPct, 1); eq(b.settings.watchlist.join(), 'RELIANCE,TCS,HDFCBANK,INFY,TITAN');
+  const text = JSON.stringify(b);
+  for (const v of Object.values(KEYS)) ok(!text.includes(v.replace(/ /g, '').toUpperCase()) && !text.includes(v), 'no key in the bundle');
+  ok(!text.includes(token), 'no token in the bundle');
+  ok(text.length < 400000, 'bundle size ' + text.length);
+  if (process.env.BUNDLE_OUT) {
+    // Fixtures for the app's screenshot check: the bundle plus chart and news answers.
+    const tcsId = G.Tables.read('Alerts').rows.find((r) => r.symbol === 'TCS').id;
+    const charts = {};
+    for (const [sym, id] of [['RELIANCE', ''], ['TCS', tcsId], ['TCS', ''], ['HDFCBANK', '']]) charts[sym + '|' + id] = post(G, { a: 'chart', t: token, symbol: sym, alertId: id }).data;
+    const news = post(G, { a: 'news', t: token, symbol: 'RELIANCE' }).data;
+    fs.writeFileSync(process.env.BUNDLE_OUT, JSON.stringify({ bundle: b, charts, news, token, url: 'https://script.google.com/macros/s/AKfycbFAKEdeploymentIDforTests1234567890/exec' }));
+  }
+});
+
+test('web app: charts — daily from Drive history, 5-minute for an intraday alert', () => {
+  const { G, sim } = dayAfter();
+  const token = sim.state.props.get('APP_TOKEN');
+  const d = post(G, { a: 'chart', t: token, symbol: 'RELIANCE' });
+  eq(d.ok, true); eq(d.data.mode, 'day'); ok(d.data.candles.length > 200 && d.data.candles[0].length === 6, 'daily candles');
+  const id = G.Tables.read('Alerts').rows.find((r) => r.symbol === 'TCS').id;
+  const i = post(G, { a: 'chart', t: token, symbol: 'TCS', alertId: id });
+  eq(i.data.mode, 'intraday'); ok(i.data.candles.length >= 6, 'five-minute bars of the alert day');
+  eq(post(G, { a: 'chart', t: token, symbol: '../x' }).ok, false, 'symbol checked');
+});
+
+test('web app: settings saved from the app reach the Config and Strategies sheets, with checks', () => {
+  const { G, sim, w } = dayAfter();
+  const token = sim.state.props.get('APP_TOKEN');
+  const r = post(G, { a: 'settings', t: token, settings: { riskPct: 1.5, realCapital: 250000, watchlist: ['tcs', 'SBIN'], paperAlerts: false }, strategies: { off: ['macd'], overrides: { orb: 'live_ready' } } });
+  eq(r.ok, true, r.error);
+  G.Config._cache = null; G.StrategyBook._map = null;
+  eq(G.Config.get('riskPct'), 1.5); eq(G.Config.get('realCapital'), 250000); eq(G.Config.get('paperAlerts'), false);
+  eq(G.Config.get('watchlist'), 'TCS,SBIN');
+  const book = G.StrategyBook.load();
+  eq(book.macd.enabled, false); eq(book.orb.status, 'LIVE_READY', 'override');
+  eq(r.data.strategiesOff.join(), 'macd');
+  eq(post(G, { a: 'settings', t: token, settings: { riskPct: 9 } }).ok, false, 'out of range');
+  eq(post(G, { a: 'settings', t: token, settings: { watchlist: ['BAD SYMBOL'] } }).ok, false, 'bad symbol');
+  eq(post(G, { a: 'settings', t: token, strategies: { overrides: { orb: 'GODMODE' } } }).ok, false, 'bad status');
+  const back = post(G, { a: 'settings', t: token, strategies: { overrides: { orb: '' } } });
+  G.StrategyBook._map = null;
+  eq(G.StrategyBook.load().orb.status, 'PAPER', 'override cleared');
+  const before = w.telegram.length;
+  eq(post(G, { a: 'testTelegram', t: token }).ok, true);
+  eq(w.telegram.length, before + 1);
+  eq(post(G, { a: 'unknown', t: token }).ok, false);
+});
+
+test('web app: headlines from Google News, parsed, checked and cached', () => {
+  const { G, sim, w } = dayAfter();
+  const token = sim.state.props.get('APP_TOKEN');
+  const r = post(G, { a: 'news', t: token, symbol: 'RELIANCE' });
+  eq(r.ok, true, r.error);
+  eq(r.data.items.length, 3, 'unsafe link dropped');
+  eq(r.data.items[0].title, 'Headline 1 & more'); eq(r.data.items[0].source, 'Paper 1'); ok(r.data.items[0].at > 0);
+  post(G, { a: 'news', t: token, symbol: 'RELIANCE' });
+  eq(w.newsCalls, 1, 'second call from the cache');
+  const q = decodeURIComponent(sim.state.requests.find((x) => x.url.includes('news.google.com')).url.split('q=')[1].split('&')[0]);
+  ok(/"RELIANCE"|RELIANCE share/.test(q), q);
+});
+
+test('connect: the link carries the web app address and token; bad addresses are refused', () => {
+  const { G, sim, w } = dayAfter();
+  const bad = G.sendConnectLink('https://example.com/exec', true);
+  eq(bad.ok, false);
+  const url = 'https://script.google.com/macros/s/AKfycbx1234567890abcdefghijklmnopqrstuvwxyz/exec';
+  const shown = G.sendConnectLink(url, false);
+  ok(shown.ok && shown.link.startsWith('https://sambadhyam.github.io/stock-radar/#/connect?u=' + encodeURIComponent(url) + '&t=' + sim.state.props.get('APP_TOKEN')), shown.link);
+  const before = w.telegram.length;
+  eq(G.sendConnectLink(url, true).sent, true);
+  ok(/Connect the Stock Radar app/.test(w.telegram[before]), w.telegram[before]);
+  eq(sim.state.props.get('WEBAPP_URL'), url);
+  sim.state.uiAvailable = true;
+  G.menuConnectApp();
+  ok(/Web app URL/.test(sim.state.dialogs[sim.state.dialogs.length - 1].html) && sim.state.dialogs[sim.state.dialogs.length - 1].html.includes(url), 'dialog prefilled');
+  const old = sim.state.props.get('APP_TOKEN');
+  G.newAppToken();
+  ok(sim.state.props.get('APP_TOKEN') !== old, 'token rotated');
+  eq(post(G, { a: 'ping', t: old }).ok, false, 'old token refused');
 });
 
 coreTests({ test, eq, ok, root: path.join(here, '..', '..') });

@@ -496,8 +496,69 @@ var Scans = {
     var fresh = AlertBook.withoutRepeats(signals, P);
     var out = AlertBook.publish(fresh, { nowMs: MarketCal.now().getTime(), source: 'Angel One daily candles', day: day });
     if (Config.get('shadowTracking') !== false) AlertBook.publish(AlertBook.withoutRepeats(shadows, P), { nowMs: MarketCal.now().getTime(), source: 'Angel One daily candles', shadow: true });
+    try { Scans.buildLists(series, rs, swingU, mediumU, fund, todayN); } catch (e) { ErrorLog.add('scanLists', e); }
     Health.log('endOfDay', 'scan', true, Date.now() - t0, scanned, scanned + ' stocks scanned, ' + stale + ' without today\'s candle, ' + signals.length + ' signals, ' + fresh.length + ' new');
     return { scanned: scanned, stale: stale, signals: fresh.length, logged: out.logged, sent: out.sent, regime: reg };
+  },
+
+  /**
+   * Ranked lists for the app's Scan screen, saved after each close:
+   *   medium: Nifty 200 stocks in an uptrend (price > 50-day > 200-day), by relative strength
+   *   swing:  stocks closest to a swing setup (base breakout, 20-EMA pullback, RSI(2) dip)
+   *   long:   stocks with fundamentals in the Fundamentals sheet, by quality-value score
+   */
+  buildLists: function (series, rs, swingU, mediumU, fund, todayN) {
+    var I = SRCore.ind, sectors = SymbolsDb.load(), round1 = function (x) { return Math.round(x * 10) / 10; };
+    var fresh = function (k) { return k && k.length >= 210 && History.msToDay(k[k.length - 1].t) === todayN; };
+    var sec = function (s) { return String((sectors[s] && sectors[s].sector) || ''); };
+    var medium = [];
+    mediumU.forEach(function (s) {
+      var k = series[s];
+      if (!fresh(k) || !(rs.now[s] >= 0)) return;
+      var c = SRCore.util.pluck(k, 'c'), i = c.length - 1, s50 = I.sma(c, 50)[i], s200 = I.sma(c, 200)[i];
+      if (!(c[i] > s50 && s50 > s200)) return;
+      var hi = SRCore.util.maxOf(SRCore.util.pluck(k, 'h'), i - 251, i), below = (1 - c[i] / hi) * 100;
+      medium.push({ symbol: s, sector: sec(s), score: Math.round(rs.now[s]), line: 'Strength rank ' + Math.round(rs.now[s]) + ' of 100 · ' + (below < 0.5 ? 'at its 52-week high' : round1(below) + '% below its 52-week high') });
+    });
+    medium.sort(function (a, b) { return b.score - a.score; });
+    var swing = [];
+    swingU.forEach(function (s) {
+      var k = series[s];
+      if (!fresh(k)) return;
+      var c = SRCore.util.pluck(k, 'c'), h = SRCore.util.pluck(k, 'h'), l = SRCore.util.pluck(k, 'l'), i = c.length - 1;
+      var s200 = I.sma(c, 200)[i];
+      if (!(c[i] > s200)) return;
+      var best = null, consider = function (score, line) { if (!best || score > best.score) best = { score: Math.round(score), line: line }; };
+      var H = SRCore.util.maxOf(h, i - 20, i - 1), L = SRCore.util.minOf(l, i - 20, i - 1), width = (H - L) / L * 100, gap = (H - c[i]) / c[i] * 100;
+      if (width <= 12 && gap >= 0 && gap <= 3) consider(90 - gap * 8 - width, round1(width) + '% base over 20 days, ' + round1(gap) + '% below the breakout level');
+      var e20 = I.ema(c, 20)[i], e50 = I.ema(c, 50)[i], near = Math.abs(c[i] - e20) / c[i] * 100;
+      if (e20 > e50 && near <= 1.5) consider(80 - near * 10, 'Uptrend, ' + round1(near) + '% from its rising 20-day EMA');
+      var r2 = I.rsi(c, 2)[i];
+      if (r2 < 20) consider(75 - r2, 'RSI(2) at ' + round1(r2) + ' while above its 200-day average');
+      if (best) swing.push({ symbol: s, sector: sec(s), score: Math.max(1, Math.min(99, best.score)), line: best.line });
+    });
+    swing.sort(function (a, b) { return b.score - a.score; });
+    var long = [];
+    Object.keys(fund).forEach(function (s) {
+      var q = SRCore.qualityValue(Scans.fundamentals(fund[s]));
+      if (q.score === null) return;
+      var f = fund[s], bits = [];
+      if (f.roePct !== '' && f.roePct !== undefined) bits.push('ROE ' + f.roePct + '%');
+      if (f.debtToEquity !== '' && f.debtToEquity !== undefined) bits.push('debt/equity ' + f.debtToEquity);
+      if (f.pe !== '' && f.pe5yMedian !== '' && f.pe !== undefined) bits.push('PE ' + f.pe + ' vs 5-year median ' + f.pe5yMedian);
+      long.push({ symbol: s, sector: sec(s), score: q.score, complete: q.completenessPct, line: bits.join(', ') || 'Scored on ' + q.completenessPct + '% of the fundamentals' });
+    });
+    long.sort(function (a, b) { return b.score - a.score; });
+    var trim = function (x) { x.line = String(x.line).slice(0, 90); x.sector = x.sector.slice(0, 40); return x; };
+    var out = { at: Date.now(), medium: medium.slice(0, 15).map(trim), swing: swing.slice(0, 15).map(trim), long: long.slice(0, 15).map(trim) };
+    var json = JSON.stringify(out);
+    while (json.length > 8800 && (out.long.length || out.swing.length || out.medium.length)) {
+      [out.long, out.swing, out.medium].forEach(function (a) { if (a.length > 5) a.pop(); });
+      json = JSON.stringify(out);
+      if (out.long.length <= 5 && out.swing.length <= 5 && out.medium.length <= 5) break;
+    }
+    Secrets.props().setProperty('SCAN_LISTS', json);
+    return out;
   },
 
   /** Fundamentals sheet row → the fields Core expects. */

@@ -4,7 +4,7 @@ Personal NSE analysis, alerts and self-checking paper trading. Phone-only workfl
 
 - **App:** https://sambadhyam.github.io/stock-radar/
 - **Repo:** `sambadhyam/stock-radar`
-- **Status:** Phase 3 complete (evaluator, paper trading, graduation, reports). The app still shows sample data until Phase 4.
+- **Status:** Phase 4 complete (Web App API; the app shows live engine data once connected, sample data until then).
 
 ---
 
@@ -58,6 +58,12 @@ Nothing in this system can place an order. Under SEBI's retail-algo rules, API o
 7. **Keys entry.** Keys are typed into a form opened from the sheet's Stock Radar menu and go straight into Script Properties, so they never sit in the code, the sheet or its version history. A manual fallback function exists for when the form can't open.
 8. **Security.** The Web App runs as the owner and requires the secret token on every call. Keys live only in Script Properties and are masked out of every log and message. The Angel One account holds no money. Portfolio data never goes into the public repo. Permissions are declared in `appsscript.json` and kept narrow: this spreadsheet only (`spreadsheets.currentonly`), Drive files the script created (`drive.file`, through the Drive web API because `DriveApp` would force full Drive access), dialogs, external requests, triggers, mail to the owner and the owner's email address.
 9. **English only.** Malayalam support was dropped at the owner's request in Phase 1.
+11. **App ↔ engine (Phase 4).**
+    - **Requests:** the Web App (`doPost` in Api.gs, deployed "Execute as me", access "Anyone") answers POST requests with a plain-text JSON body `{a, t, …}`. Plain text avoids the CORS preflight that Apps Script cannot answer.
+    - **Access:** every request needs `APP_TOKEN` (constant-time compare). Responses never contain keys or tokens.
+    - **Actions:** `ping`, `bundle` (everything the screens show, in the sample data's shape), `chart` (daily candles from Drive, or 5-minute candles for an intraday alert), `news` (Google News RSS, parsed and cached 30 minutes), `settings` (allow-listed, range-checked, written to Config and Strategies under the script lock) and `testTelegram`.
+    - **Connecting:** the sheet's **Connect the app** sends a link `…/#/connect?u=…&t=…` to the owner's Telegram. The app saves both, pings, then removes the token from the address bar. **New app token** rotates it.
+    - **On the phone:** the app caches the last bundle in localStorage, so it opens instantly and works offline, and refreshes in the background on open and every 5 minutes while visible. Charts and news load when a sheet opens. Until connected, the app shows the labelled sample data.
 10. **Evaluation (Phase 3).** The rules live in core.js (`simulateTrade`, `tradeResult`, `metrics`, `graduate`) so the Phase 5 backtester matches the live record exactly.
     - **Entry** fills like a limit order: the first candle after the alert that trades into the entry range or better (at the open if it opens inside or better, else at the range edge). Opening beyond the stop first means NOT_TRIGGERED.
     - **Exit:** a gap through the stop or target exits at the open; a candle touching both counts as the stop; in the entry candle the target counts only for an open fill; still open at expiry means EXPIRED at the last close.
@@ -155,18 +161,18 @@ stock-radar/
 │   ├── ui.js                shared components (chips, track strip, sheets)
 │   ├── charts.js            SVG candle and equity charts
 │   ├── icons.js             inline icons
-│   ├── data.js              data source switch (sample now, API in Phase 4)
+│   ├── data.js              sample data until connected; then the engine bundle with offline cache, charts on demand
 │   ├── demo.js              Phase 0 sample data, always labelled
-│   ├── api.js               (Phase 4) Apps Script client with offline cache
+│   ├── api.js               engine client (POST text/plain, token, timeouts, plain-English errors)
 │   ├── backtest.js          (Phase 5) in-browser backtester
-│   └── screens/             home, alerts, scan, results, more, settings
+│   └── screens/             home, alerts, scan, results, more, settings, connect
 ├── core/core.js             indicators, regime, strategies, checks, sizing, charges (SRCore)
 ├── apps-script/             files to paste into the Apps Script editor (README.md has the steps)
 │   ├── appsscript.json      manifest: Asia/Kolkata timezone, V8
 │   ├── Setup.gs             Stock Radar menu, sheet creation, keys form, setup checks, status
 │   ├── Data.gs              settings, storage, keys, TOTP, Angel One / Google / Yahoo with failover, calendar, stock lists
 │   ├── Engine.gs            schedule, daily tick (pre-market, snapshots, closing summary), job runner and failure alerts
-│   ├── Api.gs               Telegram and email (Web App API added in Phase 4)
+│   ├── Api.gs               Telegram and email, the Web App API, Connect the app
 │   ├── Signals.gs           Drive price history, regime, intraday and end-of-day scans, Alerts log and messages
 │   ├── Review.gs            evaluator, paper trades, checkpoints, metrics, graduation, weekly and readiness reports
 │   └── Core.gs              identical copy of core/core.js
@@ -196,5 +202,5 @@ stock-radar/
 | 1 | `setupSheets()`, providers, TOTP login, Telegram, scheduler, health log, test functions | ✅ Done (23 simulator tests) |
 | 2 | `core.js` indicators and strategies, intraday engine, EOD scans, alert logging, price history backfill | ✅ Done |
 | 3 | Evaluator, metrics, auto paper trading, graduation, daily, weekly and readiness reports | ✅ Done (74 simulator tests) |
-| 4 | Web App API, PWA wired to live data, settings synced to the engine | Next |
-| 5 | Backtester and Backtest Baseline report, portfolio import, optional AI summaries | |
+| 4 | Web App API, PWA wired to live data, settings synced to the engine | ✅ Done (79 simulator tests, live screens checked at 390×844) |
+| 5 | Backtester and Backtest Baseline report, portfolio import, optional AI summaries | Next |

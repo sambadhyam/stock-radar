@@ -4,6 +4,8 @@ import { t } from '../i18n.js';
 import { ICONS } from '../icons.js';
 import { getSettings, saveSettings, LIMITS } from '../state.js';
 import { screenHead, segmented, toast } from '../ui.js';
+import { api, isConnected, validUrl, validToken } from '../api.js';
+import { refresh, clearLive } from '../data.js';
 
 const SYMBOL_RE = /^[A-Z0-9&-]{1,20}$/;
 
@@ -34,8 +36,10 @@ function switchRow(id, title, sub, checked, disabled = false) {
   return { input, el: h('div', { class: 'srow' }, h('label', { class: 'srow-text', for: id }, h('span', null, title), sub ? h('small', null, sub) : null), input) };
 }
 
-export function render({ data }) {
-  const s = getSettings();
+export function render({ data, rerender }) {
+  // When connected, the engine's settings are the truth; the phone keeps a copy.
+  const connected = isConnected() && !data.isDemo;
+  const s = connected && data.settings ? { ...getSettings(), ...data.settings } : getSettings();
   let watch = [...s.watchlist];
   const off = new Set(s.strategiesOff);
 
@@ -70,10 +74,36 @@ export function render({ data }) {
     return r.el;
   });
 
-  const url = h('input', { id: 'f-url', type: 'url', value: s.backendUrl, placeholder: 'https://script.google.com/macros/s/…/exec', disabled: true });
-  const token = h('input', { id: 'f-token', type: 'password', value: s.token, autocomplete: 'off', disabled: true });
+  const url = h('input', { id: 'f-url', type: 'url', value: s.backendUrl, placeholder: 'https://script.google.com/macros/s/…/exec', autocomplete: 'off', spellcheck: 'false' });
+  const token = h('input', { id: 'f-token', type: 'password', value: s.token, autocomplete: 'off', spellcheck: 'false' });
+  const connMsg = h('p', { class: 'note', role: 'status', 'aria-live': 'polite' }, connected ? t('settings.connected', { v: data.version || '' }) : '');
+  const connectBtn = h('button', { type: 'button', class: 'btn btn-primary' }, t('settings.connect'));
+  connectBtn.addEventListener('click', async () => {
+    const conn = { backendUrl: url.value.trim(), token: token.value.trim() };
+    if (!validUrl(conn.backendUrl) || !validToken(conn.token)) { connMsg.textContent = t('settings.connBad'); return; }
+    connectBtn.disabled = true;
+    try {
+      const r = await api.ping(conn);
+      const prev = getSettings();
+      if (prev.backendUrl !== conn.backendUrl || prev.token !== conn.token) clearLive();
+      saveSettings(conn);
+      connMsg.textContent = t('settings.connected', { v: r.version });
+      await refresh();
+      rerender();
+    } catch (e) {
+      connMsg.textContent = t('settings.connFail', { why: e.message });
+    } finally { connectBtn.disabled = false; }
+  });
+  const disconnectBtn = h('button', { type: 'button', class: 'btn btn-ghost', disabled: !isConnected() }, t('settings.disconnect'));
+  disconnectBtn.addEventListener('click', () => { saveSettings({ backendUrl: '', token: '' }); clearLive(); toast(t('settings.disconnected')); rerender(); });
 
-  const save = () => {
+  const tgBtn = h('button', { type: 'button', class: 'btn btn-ghost btn-block', style: { marginTop: '12px' }, disabled: !connected }, t('settings.testTg'));
+  tgBtn.addEventListener('click', async () => {
+    tgBtn.disabled = true;
+    try { await api.testTelegram(); toast(t('settings.tgSent')); } catch (e) { toast(t('settings.tgFail', { why: e.message })); } finally { tgBtn.disabled = false; }
+  });
+
+  const save = async () => {
     const checks = [
       [real.input, LIMITS.realCapital], [paper.input, LIMITS.paperCapital], [risk.input, LIMITS.riskPct], [maxStock.input, LIMITS.maxPerStockPct],
     ];
@@ -85,17 +115,23 @@ export function render({ data }) {
       if (!good) ok = false;
     }
     if (!ok) { toast(t('settings.invalid')); return; }
-    saveSettings({
+    const patch = {
       realCapital: Number(real.input.value), paperCapital: Number(paper.input.value),
       riskPct: Number(risk.input.value), maxPerStockPct: Number(maxStock.input.value),
       watchlist: watch, telegram: tg.input.checked, emailDigest: em.input.checked, paperAlerts: pa.input.checked,
-      strategiesOff: [...off],
-    });
-    toast(t('settings.saved'));
+    };
+    const watchChanged = watch.join() !== s.watchlist.join();
+    saveSettings({ ...patch, strategiesOff: [...off] });
+    if (!connected) { toast(t('settings.saved')); return; }
+    try {
+      await api.saveSettings(patch, { off: [...off] });
+      toast(t('settings.savedEngine') + (watchChanged ? '. ' + t('settings.watchLater') : ''));
+      refresh();
+    } catch (e) { toast(t('settings.saveFailed', { why: e.message })); }
   };
 
   return h('div', null,
-    screenHead(t('settings.title'), t('settings.sub'), '#/more'),
+    screenHead(t('settings.title'), connected ? t('settings.sub') : t('settings.subLocal'), '#/more'),
     h('section', { class: 'form-sec' }, h('h2', null, t('settings.money')), real.el, paper.el, risk.el, maxStock.el),
     h('section', { class: 'form-sec' },
       h('h2', null, t('settings.watchlist')),
@@ -104,8 +140,8 @@ export function render({ data }) {
       h('div', { class: 'add-row' }, addInput, h('button', { type: 'button', class: 'btn btn-ghost', onclick: addSymbol }, icon(ICONS.plus), t('settings.add')))),
     h('section', { class: 'form-sec' },
       h('h2', null, t('settings.alerts')), tg.el, em.el, pa.el,
-      h('button', { type: 'button', class: 'btn btn-ghost btn-block', style: { marginTop: '12px' }, disabled: true }, t('settings.testTg')),
-      h('p', { class: 'note faint', style: { textAlign: 'center', marginTop: '6px', fontSize: '12px' } }, t('common.comingPhase', { n: 4 }))),
+      tgBtn,
+      connected ? null : h('p', { class: 'note faint', style: { textAlign: 'center', marginTop: '6px', fontSize: '12px' } }, t('settings.needConnect'))),
     h('section', { class: 'form-sec' },
       h('h2', null, t('settings.strategies')),
       h('p', { class: 'sec-note' }, t('settings.strategiesSub')),
@@ -119,6 +155,8 @@ export function render({ data }) {
     h('section', { class: 'form-sec' },
       h('h2', null, t('settings.connection')),
       h('div', { class: 'field' }, h('label', { for: 'f-url' }, t('settings.url')), url),
-      h('div', { class: 'field' }, h('label', { for: 'f-token' }, t('settings.token')), token, h('span', { class: 'hint' }, t('settings.connHint')))),
+      h('div', { class: 'field' }, h('label', { for: 'f-token' }, t('settings.token')), token, h('span', { class: 'hint' }, t('settings.connHint'))),
+      h('div', { class: 'btn-row' }, connectBtn, disconnectBtn),
+      connMsg),
     h('div', { class: 'sticky-save' }, h('button', { type: 'button', class: 'btn btn-primary btn-block', onclick: save }, t('settings.save'))));
 }

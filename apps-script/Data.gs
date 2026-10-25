@@ -6,7 +6,7 @@
  * This file holds no keys. Keys are saved privately with  Stock Radar → 2. Set up keys.
  */
 
-var SR_VERSION = '0.4.0';
+var SR_VERSION = '0.5.0';
 var IST = 'Asia/Kolkata';
 
 /* =============================== Settings =============================== */

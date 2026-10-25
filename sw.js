@@ -1,8 +1,8 @@
 // sw.js — offline support.
 // App code (HTML, JS, CSS) is network-first so updates show up straight away, with the cached copy
 // used when offline or when the network takes longer than 3 seconds. Fonts and icons are cache-first.
-// Backend API calls (Phase 4) go to another origin and are never touched here.
-const VERSION = 'sr-0.4.0';
+// Engine API calls go to script.google.com (another origin) and are never touched here.
+const VERSION = 'sr-0.5.0';
 const ASSETS = [
   './',
   'index.html',
@@ -21,6 +21,7 @@ const ASSETS = [
   'js/icons.js',
   'js/charts.js',
   'js/data.js',
+  'js/api.js',
   'js/demo.js',
   'js/screens/home.js',
   'js/screens/alerts.js',
@@ -28,6 +29,7 @@ const ASSETS = [
   'js/screens/results.js',
   'js/screens/more.js',
   'js/screens/settings.js',
+  'js/screens/connect.js',
   'core/core.js',
 ];
 

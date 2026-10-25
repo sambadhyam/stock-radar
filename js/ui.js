@@ -112,11 +112,12 @@ export function alertRow(a, onOpen) {
         h('span', null, t('alert.target') + ' ', h('b', null, fmt.price(a.targets[0]))),
         h('span', null, 'R:R ', h('b', null, fmt.num(a.rr, 1))),
         a.outcome
-          ? h('span', { class: tone(a.outcome.pct) }, `${t(OUTCOME_KEY[a.outcome.state])} ${fmt.pct(a.outcome.pct, 1)}`)
+          ? h('span', { class: a.outcome.state === 'not' ? 'faint' : tone(a.outcome.pct) },
+            a.outcome.state === 'not' || a.outcome.pct == null ? t(OUTCOME_KEY[a.outcome.state] || 'legend.flat') : `${t(OUTCOME_KEY[a.outcome.state])} ${fmt.pct(a.outcome.pct, 1)}`)
           : h('span', { class: 'faint' }, fmt.time(a.time)))));
 }
 
-const OUTCOME_KEY = { target: 'legend.win', stop: 'legend.loss', expired: 'legend.flat' };
+const OUTCOME_KEY = { target: 'legend.win', stop: 'legend.loss', expired: 'legend.flat', not: 'legend.not' };
 export function outcomeLabel(state) { return t(OUTCOME_KEY[state] || 'legend.flat'); }
 
 // ---------- Toast ----------

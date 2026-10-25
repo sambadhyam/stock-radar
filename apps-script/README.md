@@ -100,6 +100,34 @@ Weekends and NSE holidays are skipped.
 
 Your daily schedule keeps running; there is no need to start it again.
 
+## Phase 4 update: connect the phone app
+
+**1. Paste four files** (open the link, **Ctrl+A**, **Ctrl+C**; in Apps Script click in the file, **Ctrl+A**, **Ctrl+V**):
+[Api.gs](https://raw.githubusercontent.com/sambadhyam/stock-radar/main/apps-script/Api.gs) → `Api`,
+[Signals.gs](https://raw.githubusercontent.com/sambadhyam/stock-radar/main/apps-script/Signals.gs) → `Signals`,
+[Setup.gs](https://raw.githubusercontent.com/sambadhyam/stock-radar/main/apps-script/Setup.gs) → `Setup`,
+[Data.gs](https://raw.githubusercontent.com/sambadhyam/stock-radar/main/apps-script/Data.gs) → `Data`.
+Then **Ctrl+S**.
+
+**2. Publish the engine as a web app** (once):
+1. In Apps Script, top right: **Deploy → New deployment**.
+2. Click the gear next to "Select type" and choose **Web app**.
+3. Set **Execute as: Me** and **Who has access: Anyone**, then click **Deploy**.
+4. If Google asks, allow access as before.
+5. Copy the **Web app URL** (it ends with `/exec`).
+
+"Anyone" only means the app can reach the engine. Every request must carry your private app token, and without it the engine returns nothing.
+
+**3. Connect the phone:**
+1. Reload the sheet, then run **Stock Radar → Connect the app**.
+2. Paste the Web app URL and click **Send the connect link to my Telegram**.
+3. On your phone, open that link from Telegram in Chrome. The app saves the connection, checks it, and switches from sample data to your engine.
+4. Delete the Telegram message afterwards.
+
+**After any later code update**, the web app keeps running the old code until you publish a new version: **Deploy → Manage deployments → ✏️ (edit) → Version: New version → Deploy**. The address stays the same.
+
+If the link ever leaks, run **Stock Radar → New app token** and connect again.
+
 ## Phase 3 update
 
 1. In Apps Script add a new file: **+** next to **Files** → **Script** → name it `Review`.

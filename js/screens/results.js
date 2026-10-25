@@ -5,6 +5,9 @@ import {
   screenHead, segmented, horizonTag, statusChip, trackStrip, stripLegend, openSheet, previewBanner, outcomeLabel,
 } from '../ui.js';
 import { equityChart } from '../charts.js';
+import { toast } from '../ui.js';
+import { getData, refresh } from '../data.js';
+import { api, isConnected } from '../api.js';
 
 const HZ_ORDER = ['intraday', 'swing', 'medium', 'long'];
 
@@ -78,8 +81,9 @@ function paperTab(data) {
       equityChart({ points: p.curve, base: p.start, label: t('results.equity') })),
     h('section', { class: 'sec' },
       h('h2', { class: 'sec-title' }, t('results.open'), h('span', { class: 'sec-count' }, String(p.open.length))),
+      p.open.length ? null : h('p', { class: 'muted' }, t('results.noOpen')),
       h('ul', { class: 'list' }, p.open.map((o) => {
-        const pct = ((o.now - o.entry) / o.entry) * 100;
+        const pct = (o.dir === 'short' ? (o.entry - o.now) : (o.now - o.entry)) / o.entry * 100;
         return h('li', null, h('div', { class: 'row' },
           h('span', { class: 'row-title' }, o.symbol),
           h('span', { class: 'row-right num ' + tone(pct) }, fmt.pct(pct)),
@@ -91,6 +95,7 @@ function paperTab(data) {
       }))),
     h('section', { class: 'sec' },
       h('h2', { class: 'sec-title' }, t('results.closed')),
+      p.closed.length ? null : h('p', { class: 'muted' }, t('results.none')),
       h('ul', { class: 'list' }, p.closed.map((c) => h('li', null, h('div', { class: 'row' },
         h('span', { class: 'row-title' }, c.symbol),
         h('span', { class: 'row-right num ' + tone(c.pct) }, fmt.pct(c.pct)),
@@ -99,18 +104,27 @@ function paperTab(data) {
 }
 
 function reportsTab(data) {
-  const due = [30, 60, 90].map((n) => ({ n, date: data.reportDue(n) }));
+  const sent = data.readinessSent || [];
+  const due = [30, 60, 90].map((n) => ({ n, date: data.reportDue(n), sent: sent.includes(n) }));
+  const saved = data.reports || [];
   return h('div', null,
     h('section', { class: 'sec', style: { marginTop: '8px' } },
       h('h2', { class: 'sec-title' }, t('results.readiness')),
       h('p', { class: 'sec-note' }, t('results.readinessNote')),
+      due[0].date == null ? h('p', { class: 'muted' }, t('results.readinessStart')) : null,
       h('ul', { class: 'list' }, due.map((d) => h('li', null, h('div', { class: 'row' },
         h('span', { class: 'row-title', style: { fontSize: '16px' } }, t('results.day', { n: d.n })),
-        h('span', { class: 'row-right muted num' }, fmt.shortDate(d.date)),
-        h('span', { class: 'row-meta' }, t('results.scheduled'))))))),
+        h('span', { class: 'row-right muted num' }, d.date != null ? fmt.shortDate(d.date) : '—'),
+        h('span', { class: 'row-meta' }, d.sent ? t('results.sent') : t('results.scheduled'))))))),
     h('section', { class: 'sec' },
       h('h2', { class: 'sec-title' }, t('results.weekly')),
-      h('p', { class: 'sec-note' }, t('results.weeklyNote'))));
+      h('p', { class: 'sec-note' }, t('results.weeklyNote'))),
+    data.isDemo ? null : h('section', { class: 'sec' },
+      h('h2', { class: 'sec-title' }, t('results.saved')),
+      saved.length ? h('ul', { class: 'list' }, saved.map((r) => h('li', null, h('div', { class: 'row' },
+        h('span', { class: 'row-title', style: { fontSize: '16px' } }, r.title),
+        h('span', { class: 'row-right muted num' }, r.at ? fmt.shortDate(r.at) : ''),
+        h('span', { class: 'row-meta' }, r.summary))))) : h('p', { class: 'muted' }, t('results.reportsNone'))));
 }
 
 /** Strategy detail: full metrics, backtest versus paper, status rules. */
@@ -128,9 +142,37 @@ export function openStrategy(st) {
     h('h3', null, t('results.backtest')),
     compareTable(st),
     h('p', { class: 'note' }, t('results.backtestNote')),
+    st.verdict ? h('div', null, h('h3', null, t('results.verdict')), h('p', { class: 'muted' }, st.verdict)) : null,
     h('p', { class: 'note' }, t('results.rules')),
-    h('button', { type: 'button', class: 'btn btn-ghost btn-block', style: { marginTop: '18px' }, disabled: true }, t('results.override')),
-    h('p', { class: 'note', style: { textAlign: 'center' } }, t('common.comingPhase', { n: 4 }))), { label: st.name });
+    overrideBlock(st)), { label: st.name });
+}
+
+/** Set a strategy's status by hand (or back to automatic), saved in the engine's Strategies sheet. */
+function overrideBlock(st) {
+  if (!isConnected() || getData().isDemo) {
+    return h('div', null,
+      h('button', { type: 'button', class: 'btn btn-ghost btn-block', style: { marginTop: '18px' }, disabled: true }, t('results.override')),
+      h('p', { class: 'note', style: { textAlign: 'center' } }, t('results.overrideConnect')));
+  }
+  const current = { PAPER: 'PAPER', LIVE_READY: 'LIVE_READY', REJECTED: 'REJECTED' }[String(st.override || '').toUpperCase()] || '';
+  let saving = false;
+  return h('div', { style: { marginTop: '18px' } },
+    h('h3', null, t('results.override')),
+    segmented([
+      { value: '', label: t('results.overrideAuto') },
+      { value: 'PAPER', label: t('status.paper') },
+      { value: 'LIVE_READY', label: t('status.live') },
+      { value: 'REJECTED', label: t('status.rejected') },
+    ], current, async (v) => {
+      if (saving) return;
+      saving = true;
+      try {
+        await api.saveSettings({}, { overrides: { [st.id]: v } });
+        toast(t('results.overrideSaved'));
+        refresh();
+      } catch (e) { toast(e.message); } finally { saving = false; }
+    }, t('results.overrideTitle', { name: st.name })),
+    h('p', { class: 'note' }, t('results.overrideNote')));
 }
 
 function compareTable(st) {

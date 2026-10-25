@@ -8,7 +8,7 @@ import {
   openSheet, kvList, toast, previewBanner,
 } from '../ui.js';
 import { candleChart } from '../charts.js';
-import { getData } from '../data.js';
+import { getData, loadAlertChart } from '../data.js';
 
 const OVERLAY_LABEL = { ema20: '20-day EMA', sma50: () => t('stock.dma50'), sma200: () => t('stock.dma200'), vwap: 'VWAP' };
 const overlayLabel = (k) => (typeof OVERLAY_LABEL[k] === 'function' ? OVERLAY_LABEL[k]() : OVERLAY_LABEL[k] || k);
@@ -67,13 +67,19 @@ export function openAlert(a) {
         h('div', { class: 'sheet-sub' }, h('span', null, a.strategyName), h('span', { class: 'faint num' }, `${fmt.dayMonth(a.time)} ${fmt.time(a.time)}`))),
       closeBtn);
 
-    const chart = candleChart({
-      candles: a.chart.candles,
+    const drawChart = (c) => candleChart({
+      candles: c.candles,
       levels: isExit ? {} : { entryLo: a.entryLo, entryHi: a.entryHi, stop: a.stop, targets: a.targets },
-      overlays: a.chart.overlays.map((o) => ({ values: o.values, label: overlayLabel(o.key) })),
-      mode: a.chart.mode,
+      overlays: (c.overlays || []).map((o) => ({ values: o.values, label: overlayLabel(o.key) })),
+      mode: c.mode,
       label: `${a.symbol} ${t('stock.chart')}`,
     });
+    // Sample alerts carry their chart; live ones load it from the engine when opened.
+    const chart = a.chart ? drawChart(a.chart) : h('div', { class: 'chart', style: { minHeight: '120px', display: 'grid', placeItems: 'center' } }, h('span', { class: 'faint' }, t('alert.chartLoading')));
+    if (!a.chart) {
+      loadAlertChart(a).then((c) => chart.replaceWith(c && c.candles.length ? drawChart(c) : h('p', { class: 'muted' }, t('alert.chartNone'))))
+        .catch((e) => chart.replaceWith(h('p', { class: 'muted' }, t('alert.chartFail', { why: e.message }))));
+    }
 
     const plan = isExit
       ? kvList([
@@ -110,11 +116,15 @@ export function openAlert(a) {
 
     const statusNote = h('div', { class: 'paper-note' }, icon(ICONS.shield),
       h('span', null, isExit ? t('alert.exitNote')
-        : a.status === 'live' ? t('status.liveNote', { win: st.win, n: st.trades }) : t('status.paperNote')));
+        : a.dir === 'short' ? t('alert.shortNote')
+          : a.status === 'live' ? t('status.liveNote', { win: st.win, n: st.trades }) : t('status.paperNote')));
+    const p = a.paper;
+    const paperLine = p && p.qty > 0 ? h('p', { class: 'note' }, t('alert.paperResult', { qty: fmt.int(p.qty), fill: fmt.price(p.fill) }) +
+      (p.exit != null && p.net != null ? t('alert.paperExit', { exit: fmt.price(p.exit), net: fmt.signedMoney(p.net) }) : '') + '.') : null;
 
     const orderText = isExit
       ? [`EXIT ${a.symbol} (NSE)`, `Reason: ${a.headline}`, `Last price: ${fmt.price(a.lastPrice)}`, `Stock Radar ${a.status === 'live' ? '' : '[PAPER]'}`].join('\n')
-      : [`BUY ${a.symbol} (NSE)`, size ? `Qty: ${size.qty}` : '', `Limit: ${fmt.price(mid)} (zone ${fmt.priceRange(a.entryLo, a.entryHi)})`,
+      : [`${a.dir === 'short' ? 'SELL (short, intraday MIS)' : 'BUY'} ${a.symbol} (NSE)`, size ? `Qty: ${size.qty}` : '', `Limit: ${fmt.price(mid)} (zone ${fmt.priceRange(a.entryLo, a.entryHi)})`,
         `Stop-loss: ${fmt.price(a.stop)}`, `Target: ${a.targets.map(fmt.price).join(' / ')}`,
         `${t('hz.' + a.horizon)} (${t('hzw.' + a.horizon)})`, `Stock Radar ${a.status === 'live' ? '' : '[PAPER]'}`].filter(Boolean).join('\n');
 
@@ -125,7 +135,7 @@ export function openAlert(a) {
       }, icon(ICONS.copy), t('alert.copy')),
       h('a', { class: 'btn btn-ghost', href: 'https://kite.zerodha.com/', target: '_blank', rel: 'noopener' }, icon(ICONS.external), t('alert.kite')));
 
-    return h('div', null, head, chart, statusNote,
+    return h('div', null, head, chart, statusNote, paperLine,
       h('h3', null, isExit ? t('alert.changed') : t('alert.plan')),
       isExit ? h('p', { class: 'muted', style: { marginBottom: '10px' } }, a.headline) : null,
       plan, sizeBlock,

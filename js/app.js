@@ -4,13 +4,14 @@ import { t } from './i18n.js';
 import { ICONS } from './icons.js';
 import { applyLook, getSettings, saveSettings, effectiveTheme } from './state.js';
 import { closeSheet, sheetIsOpen } from './ui.js';
-import { getData } from './data.js';
+import { getData, onData, startAutoRefresh } from './data.js';
 import * as home from './screens/home.js';
 import * as alerts from './screens/alerts.js';
 import * as scan from './screens/scan.js';
 import * as results from './screens/results.js';
 import * as more from './screens/more.js';
 import * as settings from './screens/settings.js';
+import * as connect from './screens/connect.js';
 
 const ROUTES = {
   home: { tab: 'home', render: home.render },
@@ -22,6 +23,7 @@ const ROUTES = {
   portfolio: { tab: 'more', render: more.renderPortfolio },
   backtest: { tab: 'more', render: more.renderBacktest },
   about: { tab: 'more', render: more.renderAbout },
+  connect: { tab: 'more', render: connect.render },
 };
 const TABS = ['home', 'alerts', 'scan', 'results', 'more'];
 
@@ -88,6 +90,9 @@ function boot() {
     matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { if (getSettings().theme === 'system') { applyLook(); paintChrome(); } });
   } catch (e) { /* older browsers */ }
   route();
+  // Redraw when fresh engine data arrives, unless a sheet is open (it would close under the user's finger).
+  onData(() => { if (!sheetIsOpen() && parseHash().name !== 'connect') route(); });
+  startAutoRefresh();
   if ('serviceWorker' in navigator && location.protocol === 'https:') {
     navigator.serviceWorker.register('sw.js').catch(() => { /* offline support is optional */ });
   }

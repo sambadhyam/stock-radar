@@ -4,6 +4,7 @@ import { t } from '../i18n.js';
 import { ICONS } from '../icons.js';
 import { screenHead, previewBanner } from '../ui.js';
 import { APP_VERSION } from '../state.js';
+import { isConnected } from '../api.js';
 
 export function render({ data }) {
   const item = (href, ic, title, sub) => h('li', null,
@@ -21,7 +22,7 @@ export function render({ data }) {
     data.isDemo ? previewBanner() : null,
     screenHead(t('more.title')),
     list,
-    h('p', { class: 'foot' }, t('more.version', { v: APP_VERSION })));
+    h('p', { class: 'foot' }, t('more.version', { v: APP_VERSION }) + ' ' + (isConnected() && !data.isDemo ? t('more.connected') : t('more.notConnected'))));
 }
 
 export function renderPortfolio() {

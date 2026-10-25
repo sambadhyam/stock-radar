@@ -272,11 +272,16 @@ export function createSim({ files, order, manifest }) {
       },
     },
     HtmlService: { createHtmlOutput: (html) => { const o = { getContent: () => html, setWidth: () => o, setHeight: () => o }; return o; } },
+    ContentService: {
+      MimeType: { JSON: 'application/json', TEXT: 'text/plain' },
+      createTextOutput: (text) => { const o = { text: String(text), mime: 'text/plain', getContent: () => o.text, setMimeType: (m) => { o.mime = m; return o; }, getMimeType: () => o.mime }; return o; },
+    },
     ScriptApp: {
       newTrigger: (h) => { need('ScriptApp.newTrigger', 'script.scriptapp'); return builder(h); },
       getProjectTriggers: () => { need('ScriptApp.getProjectTriggers', 'script.scriptapp'); return [...state.triggers]; },
       deleteTrigger: (t) => { need('ScriptApp.deleteTrigger', 'script.scriptapp'); state.triggers = state.triggers.filter((x) => x.id !== t.id); },
       getOAuthToken: () => state.oauthToken,
+      getService: () => ({ getUrl: () => state.serviceUrl || 'https://script.google.com/macros/s/AKfycbFAKEdeploymentIDforTests1234567890/dev' }),
       WeekDay: { MONDAY: 'MONDAY', SATURDAY: 'SATURDAY', SUNDAY: 'SUNDAY' },
       EventType: { CLOCK: 'CLOCK' },
     },

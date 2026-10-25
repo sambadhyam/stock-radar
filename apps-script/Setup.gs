@@ -19,6 +19,8 @@ function onOpen() {
     .addSeparator()
     .addItem('Status', 'showStatus')
     .addItem('Update paper results now', 'updatePaperResults')
+    .addItem('Connect the app', 'menuConnectApp')
+    .addItem('New app token', 'newAppToken')
     .addItem('Send a test Telegram message', 'testTelegram')
     .addItem('Stop daily schedule', 'removeSchedule')
     .addToUi();
@@ -487,6 +489,31 @@ var Setup = {
       '</script></body></html>';
   },
 
+  /** The Connect the app dialog: deploy steps, the web app address, and two ways to get the link to the phone. */
+  connectHtml: function (url) {
+    var e = this.esc;
+    return '<!doctype html><html><head><base target="_top"><meta name="viewport" content="width=device-width,initial-scale=1"><style>' + this.CSS + 'ol{padding-left:20px;margin:0 0 12px}li{margin-bottom:6px}textarea{width:100%;box-sizing:border-box;height:84px;border:1px solid #CBD8D7;border-radius:10px;padding:8px;font-size:12px}</style></head><body>' +
+      '<p><b>Once, in the Apps Script editor:</b></p><ol>' +
+      '<li><b>Deploy → New deployment</b>, click the gear next to "Select type" and choose <b>Web app</b>.</li>' +
+      '<li>Execute as: <b>Me</b>. Who has access: <b>Anyone</b>. Click <b>Deploy</b> and copy the <b>Web app URL</b>.</li>' +
+      '<li>After any later code update: <b>Deploy → Manage deployments → ✏️ → Version: New version → Deploy</b>.</li></ol>' +
+      '<p class="muted">"Anyone" only lets the app reach the engine. Every request still needs your private app token; without it nothing is returned.</p>' +
+      '<div class="f"><label for="url"><span>Web app URL</span></label><input id="url" type="text" value="' + e(url || '') + '" placeholder="https://script.google.com/macros/s/…/exec" autocomplete="off" spellcheck="false"></div>' +
+      '<button id="tg">Send the connect link to my Telegram</button>' +
+      '<p style="margin:10px 0 6px;text-align:center" class="muted">or</p>' +
+      '<button id="show" style="background:#E1E9E8;color:#0E242B">Show the link here</button>' +
+      '<div id="msg" class="msg"></div><textarea id="link" readonly style="display:none"></textarea>' +
+      '<p class="muted" style="margin-top:10px">Open the link on your phone in Chrome. It saves the address and token in the app and checks the connection.</p>' +
+      '<script>' +
+      'function go(tg){var m=document.getElementById("msg"),l=document.getElementById("link");m.className="msg";' +
+      'google.script.run.withSuccessHandler(function(r){if(!r.ok){m.className="msg bad";m.textContent=r.error;return;}' +
+      'if(r.sent){m.className="msg good";m.textContent="Sent. Open the link from Telegram on your phone.";}' +
+      'else{l.style.display="block";l.value=r.link;l.select();m.className="msg good";m.textContent="Copy this link and open it on your phone.";}})' +
+      '.withFailureHandler(function(x){m.className="msg bad";m.textContent=(x&&x.message)?x.message:String(x);}).sendConnectLink(document.getElementById("url").value,tg);}' +
+      'document.getElementById("tg").onclick=function(){go(true);};document.getElementById("show").onclick=function(){go(false);};' +
+      '</script></body></html>';
+  },
+
   checksHtml: function (results, summary) {
     var self = this;
     var rows = results.map(function (r) {
@@ -519,7 +546,7 @@ var Setup = {
       li('Strategies on', String(StrategyBook.enabled(['INTRADAY', 'SWING', 'MEDIUM', 'LONG']).length) + ' of ' + SRCore.STRATEGIES.length) +
       li('Paper trading', Setup.paperLine()) +
       li('Emails left today', String(MailApp.getRemainingDailyQuota())) +
-      li('App token (for Phase 4)', 'Saved, shown when the app is connected') +
+      li('App connection', Secrets.get('WEBAPP_URL') ? 'Web app address saved; use Connect the app to send the link again' : 'Not set up yet: Stock Radar → Connect the app') +
       '</table><h3>Last runs</h3><table>' + (jobRows || li('No runs yet', 'They appear after the schedule starts')) + '</table></body></html>';
   },
 
