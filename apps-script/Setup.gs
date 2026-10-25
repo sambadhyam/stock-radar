@@ -147,10 +147,12 @@ function setupSecretsManually() {
 
 /** Run every setup check, write the results to the Checks sheet and send a summary to Telegram. */
 function runAllTests() {
-  var results = Checks.runAll();
-  Store.replaceAll('Checks', results.map(function (r) { return [new Date(), r.check, r.result, r.detail]; }));
+  // Each result is written to the Checks sheet as soon as it is known, so a slow network
+  // never loses the results. Big downloads (stock lists) are checked in 4. Load stock lists.
+  Store.replaceAll('Checks', []);
+  var results = Checks.runAll(function (r) { Store.append('Checks', [[new Date(), r.check, r.result, r.detail]]); });
   var count = function (k) { return results.filter(function (r) { return r.result === k; }).length; };
-  var summary = count('PASS') + ' passed, ' + count('WARN') + ' warnings, ' + count('FAIL') + ' failed';
+  var summary = count('PASS') + ' passed, ' + count('WARN') + ' warnings, ' + count('FAIL') + ' failed' + (count('NOT RUN') ? ', ' + count('NOT RUN') + ' not run' : '');
   var notPass = results.filter(function (r) { return r.result !== 'PASS'; });
   Notify.safeTelegram('<b>Stock Radar setup check</b>\n' + summary +
     (notPass.length ? '\n\n' + notPass.map(function (r) { return r.result + ': ' + Notify.esc(r.check) + ' — ' + Notify.esc(r.detail); }).join('\n') : '\n\nEverything works.'));
@@ -175,18 +177,28 @@ var Checks = {
     ['Live quotes', 'quotes'],
     ['Daily candles', 'dailyCandles'],
     ['5-minute candles', 'intradayCandles'],
-    ['Instrument list', 'instrumentList'],
-    ['Nifty stock lists', 'constituents'],
     ['Google Finance backup', 'googleFinance'],
     ['Yahoo Finance backup', 'yahoo'],
     ['Price cross-check', 'crossCheck'],
     ['Trading calendar', 'calendar'],
   ],
 
-  runAll: function () {
-    var self = this;
-    return this.LIST.map(function (c) { return self.runOne(c[0], self[c[1]]); });
+  /** Runs the checks within a time budget. If Angel One login fails, the other Angel One checks are skipped. */
+  runAll: function (onResult) {
+    var self = this, t0 = Date.now(), out = [], loginFailed = false;
+    this.LIST.forEach(function (c) {
+      var r;
+      if (Date.now() - t0 > 240000) r = { check: c[0], result: 'NOT RUN', detail: 'Stopped early to stay inside Google\'s 6-minute limit. Run 3. Run all tests again.' };
+      else if (loginFailed && self.ANGEL_CHECKS.indexOf(c[1]) >= 0) r = { check: c[0], result: 'SKIP', detail: 'Skipped because Angel One login failed' };
+      else r = self.runOne(c[0], self[c[1]]);
+      if (c[1] === 'angelLogin' && r.result === 'FAIL') loginFailed = true;
+      out.push(r);
+      if (onResult) { try { onResult(r); } catch (e) { /* sheet write is optional */ } }
+    });
+    return out;
   },
+
+  ANGEL_CHECKS: ['search', 'quotes', 'dailyCandles', 'intradayCandles', 'crossCheck'],
 
   runOne: function (name, fn) {
     var t0 = Date.now();
