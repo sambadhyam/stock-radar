@@ -1,6 +1,7 @@
 // tests.mjs — run with:  node tools/gas-sim/tests.mjs
 // Exercises apps-script/*.gs against simulated Google services and fake Angel One / Telegram servers.
 import crypto from 'node:crypto';
+import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createSim } from './sim.mjs';
@@ -11,6 +12,8 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const FILES = path.join(here, '..', '..', 'apps-script');
 // Setup.gs first on purpose: the engine must not depend on the order files load in.
 const ORDER = ['Setup.gs', 'Signals.gs', 'Engine.gs', 'Api.gs', 'Data.gs', 'Core.gs'];
+// Every test runs under the real manifest, so a permission missing from appsscript.json fails here first.
+const MANIFEST = JSON.parse(fs.readFileSync(path.join(FILES, 'appsscript.json'), 'utf8'));
 
 let passed = 0, failed = 0;
 const results = [];
@@ -160,7 +163,7 @@ function world(sim, opts = {}) {
 }
 
 function fresh(opts) {
-  const sim = createSim({ files: FILES, order: ORDER });
+  const sim = createSim({ files: FILES, order: ORDER, manifest: MANIFEST });
   const w = world(sim, opts);
   return { sim, w, G: sim.ctx };
 }
@@ -509,12 +512,13 @@ test('price history: the menu loads every stock into 12 Drive files and reports 
   const r = G.loadHistory();
   eq(r.remaining, 0, 'all loaded');
   eq(r.symbols, 500 + 3 + 3, 'stocks, ETFs and the three indices');
-  const folder = sim.state.drive.folders.find((f) => f.name === 'Stock Radar Data');
-  ok(folder, 'Drive folder created');
-  const files = sim.state.drive.files.filter((f) => f.folder === folder).map((f) => f.name).sort();
+  const folder = sim.state.drive.items.find((f) => f.name === 'Stock Radar Data' && f.mimeType === 'application/vnd.google-apps.folder');
+  ok(folder && folder.byApp, 'Drive folder created by the script');
+  const inFolder = sim.state.drive.items.filter((f) => f.parents.includes(folder.id));
+  const files = inFolder.map((f) => f.name).sort();
   eq(files.length, 12, 'twelve files'); eq(files[0], 'daily-00.json');
   ok(files.every((n) => /^daily-\d\d\.json$/.test(n)), files.join());
-  const sizes = sim.state.drive.files.filter((f) => f.folder === folder).map((f) => f.content.length);
+  const sizes = inFolder.map((f) => f.content.length);
   const total = sizes.reduce((a, b) => a + b, 0);
   if (process.env.SIZES) console.log('pack sizes (KB):', sizes.map((x) => Math.round(x / 1024)).join(' '), 'total MB', (total / 1048576).toFixed(1));
   ok(Math.max(...sizes) < 1.5 * 1048576, 'each file stays small: ' + Math.max(...sizes));
@@ -684,6 +688,63 @@ test('status shows price history, regime and strategies', () => {
   G.showStatus();
   const html = sim.state.dialogs[sim.state.dialogs.length - 1].html;
   ok(/506 stocks and indices/.test(html) && /Bull \(as of Fri 23 Oct\)/.test(html) && /13 of 13/.test(html), html.split('<body>')[1].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' '));
+});
+
+test('permissions: the manifest asks only for narrow access, and the code needs nothing more', () => {
+  const want = ['spreadsheets.currentonly', 'script.container.ui', 'script.external_request', 'script.scriptapp', 'script.send_mail', 'userinfo.email', 'drive.file'];
+  const have = MANIFEST.oauthScopes.map((x) => x.replace('https://www.googleapis.com/auth/', ''));
+  eq(have.slice().sort().join(), want.slice().sort().join(), 'scopes');
+  ok(!have.includes('drive') && !have.includes('spreadsheets'), 'no access to all of Drive or all spreadsheets');
+  eq(MANIFEST.timeZone, 'Asia/Kolkata'); eq(MANIFEST.runtimeVersion, 'V8');
+  ok(MANIFEST.dependencies.enabledAdvancedServices.some((x) => x.serviceId === 'drive' && x.version === 'v3'), 'Drive API switched on for the script');
+  const code = ORDER.map((f) => fs.readFileSync(path.join(FILES, f), 'utf8')).join('\n');
+  for (const bad of [/DriveApp/, /openById|openByUrl/, /GmailApp|DocumentApp|CalendarApp|FormApp|SlidesApp/]) ok(!bad.test(code), 'code must not use ' + bad + ' (it needs a wider permission)');
+});
+
+test('Drive: the script sees only its own files, even if you have a folder with the same name', () => {
+  const env = fresh();
+  const { G, sim } = env;
+  // A folder of yours with the same name, which the script must never see or touch.
+  sim.state.drive.items.push({ id: 'mine1', name: 'Stock Radar Data', mimeType: 'application/vnd.google-apps.folder', parents: [], content: '', trashed: false, byApp: false });
+  sim.state.drive.items.push({ id: 'mine2', name: 'daily-00.json', mimeType: 'application/json', parents: ['mine1'], content: 'my own notes', trashed: false, byApp: false });
+  G.setupSheets(); G.saveSecretsFromDialog(KEYS);
+  const id = G.History.folderId();
+  ok(id !== 'mine1', 'made its own folder');
+  G.History.put('NIFTY 50', [{ t: Date.parse('2026-10-23T00:00:00+05:30'), o: 1, h: 2, l: 0.5, c: 1.5, v: 0 }]);
+  G.History.flush();
+  eq(sim.state.drive.items.find((x) => x.id === 'mine2').content, 'my own notes', 'your file untouched');
+  G.History.reset();
+  eq(G.History.get('NIFTY 50').length, 1, 'reads back its own file');
+});
+
+test('Drive: a failed read stops the job instead of overwriting history', () => {
+  const { G, sim, w } = marketWorld();
+  G.MarketCal._now = at('2026-10-25T21:00:00+05:30');
+  G.loadHistory();
+  const before = sim.state.drive.items.filter((x) => /^daily-/.test(x.name)).map((x) => x.content).join('|');
+  G.History.reset();
+  sim.state.drive.failReads = 1000; // Drive keeps failing for this run
+  G.MarketCal._now = at('2026-10-26T16:50:00+05:30'); // past the wait for today's candle, so the files are read
+  let threw = false;
+  try { G.Scans.updateHistory('2026-10-26', {}, Date.now() + 60000); } catch (e) { threw = /Google Drive/.test(e.message); }
+  ok(threw, 'the update stops with a Drive error');
+  const after = sim.state.drive.items.filter((x) => /^daily-/.test(x.name)).map((x) => x.content).join('|');
+  ok(before === after, 'no price file was overwritten');
+});
+
+test('Drive: a clear message when the Drive API or the permission is missing', () => {
+  const { G, sim } = fresh();
+  G.setupSheets();
+  sim.state.drive.apiOff = true;
+  const r = G.Checks.runOne('Google Drive files', G.Checks.drive);
+  eq(r.result, 'FAIL'); ok(/Services/.test(r.detail) && /Drive API/.test(r.detail), r.detail);
+  sim.state.drive.apiOff = false;
+  const ok2 = G.Checks.runOne('Google Drive files', G.Checks.drive);
+  eq(ok2.result, 'PASS', ok2.detail);
+  const narrow = createSim({ files: FILES, order: ORDER, manifest: { ...MANIFEST, oauthScopes: MANIFEST.oauthScopes.filter((x) => !/drive/.test(x)) } });
+  narrow.ctx.setupSheets();
+  const r3 = narrow.ctx.Checks.runOne('Google Drive files', narrow.ctx.Checks.drive);
+  eq(r3.result, 'FAIL'); ok(/permission is missing/.test(r3.detail), r3.detail);
 });
 
 coreTests({ test, eq, ok, root: path.join(here, '..', '..') });

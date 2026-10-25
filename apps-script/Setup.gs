@@ -178,6 +178,7 @@ var Checks = {
     ['Keys saved', 'keys'],
     ['Telegram message', 'telegram'],
     ['Email', 'email'],
+    ['Google Drive files', 'drive'],
     ['Angel One login', 'angelLogin'],
     ['Symbol search', 'search'],
     ['Live quotes', 'quotes'],
@@ -234,6 +235,13 @@ var Checks = {
   email: function () {
     Notify.email('Email test', Notify.htmlFromTelegram('Stock Radar can email you. Daily summaries will arrive here after 4 pm on trading days.'));
     return { result: 'PASS', detail: 'Test email sent to ' + Session.getEffectiveUser().getEmail() + '. Emails left today: ' + MailApp.getRemainingDailyQuota() };
+  },
+
+  /** The price-history folder: found or created, and listed, with the "own files only" Drive permission. */
+  drive: function () {
+    History.reset();
+    var n = Object.keys(History.fileIds()).length;
+    return { result: 'PASS', detail: 'Folder "' + History.FOLDER + '" is ready with ' + n + ' price file' + (n === 1 ? '' : 's') + '. This script can see only files it created.' };
   },
 
   angelLogin: function () {

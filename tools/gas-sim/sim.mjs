@@ -2,6 +2,8 @@
 // It mimics the services the engine uses, including Sheets quirks that cause real bugs:
 // fixed sheet sizes, strings turning into dates/numbers/booleans unless the cell is plain text,
 // Java-byte HMAC arguments, and UI calls failing when run outside the sheet.
+// Given the project manifest, it also enforces its oauthScopes like Apps Script does, and serves
+// a fake Google Drive web API with the drive.file rule (the script sees only files it created).
 import vm from 'node:vm';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -150,7 +152,16 @@ class Spreadsheet {
 }
 
 // ---------------- The simulator ----------------
-export function createSim({ files, order }) {
+const AUTH = 'https://www.googleapis.com/auth/';
+const FOLDER_TYPE = 'application/vnd.google-apps.folder';
+
+export function createSim({ files, order, manifest }) {
+  // Explicit oauthScopes switch off automatic detection: anything not listed is refused.
+  const scopes = manifest && manifest.oauthScopes ? manifest.oauthScopes.map((x) => x.replace(AUTH, '')) : null;
+  const need = (what, ...alts) => {
+    if (!scopes || alts.some((a) => scopes.includes(a))) return;
+    throw new Error(`Exception: You do not have permission to call ${what}. Required permissions: ${alts.map((a) => AUTH + a).join(' or ')}`);
+  };
   const state = {
     props: new Map(), cache: new Map(), triggers: [], requests: [], emails: [], alerts: [], dialogs: [],
     telegram: [], logs: [], sleepMs: 0, uiAvailable: false, lockBusy: false, gfValues: {}, gfLoadingRounds: 0, gfFlushes: 0,
@@ -231,10 +242,11 @@ export function createSim({ files, order }) {
       },
     },
     UrlFetchApp: {
-      fetchAll: (reqs) => reqs.map((r) => sandbox.UrlFetchApp.fetch(r.url, r)),
+      fetchAll: (reqs) => { need('UrlFetchApp.fetchAll', 'script.external_request'); return reqs.map((r) => sandbox.UrlFetchApp.fetch(r.url, r)); },
       fetch: (url, opts = {}) => {
+        need('UrlFetchApp.fetch', 'script.external_request');
         state.requests.push({ url, opts });
-        const r = state.fetch(url, opts);
+        const r = /^https:\/\/www\.googleapis\.com\/(upload\/)?drive\//.test(url) ? driveApi(url, opts) : state.fetch(url, opts);
         if (r && r.throw) throw new Error(r.throw);
         const body = typeof r.body === 'string' ? r.body : JSON.stringify(r.body);
         if (!opts.muteHttpExceptions && r.code >= 400) throw new Error('Request failed with code ' + r.code);
@@ -251,54 +263,84 @@ export function createSim({ files, order }) {
     },
     LockService: { getScriptLock: () => ({ tryLock: () => !state.lockBusy, releaseLock: () => {}, waitLock: () => {} }) },
     SpreadsheetApp: {
-      getActiveSpreadsheet: () => ss,
-      flush: () => { state.gfFlushes++; },
-      getUi: () => { if (!state.uiAvailable) throw new Error('Cannot call SpreadsheetApp.getUi() from this context.'); return ui; },
+      getActiveSpreadsheet: () => { need('SpreadsheetApp.getActiveSpreadsheet', 'spreadsheets', 'spreadsheets.currentonly'); return ss; },
+      flush: () => { need('SpreadsheetApp.flush', 'spreadsheets', 'spreadsheets.currentonly'); state.gfFlushes++; },
+      getUi: () => {
+        if (!state.uiAvailable) throw new Error('Cannot call SpreadsheetApp.getUi() from this context.');
+        need('SpreadsheetApp.getUi', 'script.container.ui');
+        return ui;
+      },
     },
     HtmlService: { createHtmlOutput: (html) => { const o = { getContent: () => html, setWidth: () => o, setHeight: () => o }; return o; } },
     ScriptApp: {
-      newTrigger: builder,
-      getProjectTriggers: () => [...state.triggers],
-      deleteTrigger: (t) => { state.triggers = state.triggers.filter((x) => x.id !== t.id); },
+      newTrigger: (h) => { need('ScriptApp.newTrigger', 'script.scriptapp'); return builder(h); },
+      getProjectTriggers: () => { need('ScriptApp.getProjectTriggers', 'script.scriptapp'); return [...state.triggers]; },
+      deleteTrigger: (t) => { need('ScriptApp.deleteTrigger', 'script.scriptapp'); state.triggers = state.triggers.filter((x) => x.id !== t.id); },
+      getOAuthToken: () => state.oauthToken,
       WeekDay: { MONDAY: 'MONDAY', SATURDAY: 'SATURDAY', SUNDAY: 'SUNDAY' },
       EventType: { CLOCK: 'CLOCK' },
     },
     MailApp: {
-      sendEmail: (o) => { if (!o.to) throw new Error('to is required'); state.emails.push(o); },
-      getRemainingDailyQuota: () => 100 - state.emails.length,
+      sendEmail: (o) => { need('MailApp.sendEmail', 'script.send_mail'); if (!o.to) throw new Error('to is required'); state.emails.push(o); },
+      getRemainingDailyQuota: () => { need('MailApp.getRemainingDailyQuota', 'script.send_mail'); return 100 - state.emails.length; },
     },
-    Session: { getEffectiveUser: () => ({ getEmail: () => 'owner@example.com' }) },
+    Session: { getEffectiveUser: () => ({ getEmail: () => { need('Session.getEffectiveUser', 'userinfo.email'); return 'owner@example.com'; } }) },
   };
-  // ---------------- Drive (folders and files kept in memory) ----------------
-  state.drive = { folders: [], files: [], reads: 0, writes: 0 };
-  const iter = (arr) => { let i = 0; return { hasNext: () => i < arr.length, next: () => arr[i++] }; };
-  const makeFile = (name, content, folder) => {
-    const f = {
-      id: 'file' + (++state.uid), name, content: String(content), folder,
-      getId: () => f.id, getName: () => f.name, isTrashed: () => false,
-      getBlob: () => ({ getDataAsString: () => { state.drive.reads++; return f.content; } }),
-      setContent: (c) => { if (String(c).length > 50 * 1024 * 1024) throw new Error('File too large'); state.drive.writes++; f.content = String(c); return f; },
-      getSize: () => f.content.length,
-    };
-    state.drive.files.push(f);
-    return f;
+  // ---------------- Google Drive (kept in memory) ----------------
+  // items: {id, name, mimeType, parents, content, trashed, byApp}. byApp marks files this script created:
+  // with the drive.file permission only those are visible to it.
+  state.drive = { items: [], reads: 0, writes: 0, apiOff: false, failReads: 0 };
+  const driveFull = () => !scopes || scopes.includes('drive');
+  const visible = (it) => !it.trashed && (it.byApp || driveFull());
+  const driveError = (code, message, reason) => ({ code, body: { error: { code, message, errors: [{ reason: reason || 'error', message }] } } });
+  const matchQuery = (q) => {
+    const tests = q.split(' and ').map((c) => {
+      let m;
+      if ((m = /^name = '(.*)'$/.exec(c))) return (it) => it.name === m[1];
+      if ((m = /^mimeType = '(.*)'$/.exec(c))) return (it) => it.mimeType === m[1];
+      if ((m = /^'(.+)' in parents$/.exec(c))) return (it) => it.parents.includes(m[1]);
+      if ((m = /^trashed = (true|false)$/.exec(c))) return (it) => it.trashed === (m[1] === 'true');
+      throw new Error('sim: unsupported Drive query clause: ' + c);
+    });
+    return (it) => tests.every((t) => t(it));
   };
-  const makeFolder = (name) => {
-    const d = {
-      id: 'folder' + (++state.uid), name,
-      getId: () => d.id, getName: () => d.name, isTrashed: () => false,
-      getFilesByName: (n) => iter(state.drive.files.filter((f) => f.folder === d && f.name === n)),
-      getFiles: () => iter(state.drive.files.filter((f) => f.folder === d)),
-      createFile: (n, c) => { state.drive.writes++; return makeFile(n, c, d); },
-    };
-    state.drive.folders.push(d);
-    return d;
+  const driveApi = (url, opts) => {
+    const u = new URL(url), method = String(opts.method || 'get').toLowerCase();
+    const auth = (opts.headers || {}).Authorization || (opts.headers || {}).authorization;
+    if (auth !== 'Bearer ' + state.oauthToken) return driveError(401, 'Request had invalid authentication credentials.', 'authError');
+    if (state.drive.apiOff) return driveError(403, 'Google Drive API has not been used in project 123456 before or it is disabled.', 'accessNotConfigured');
+    if (scopes && !scopes.includes('drive') && !scopes.includes('drive.file')) return driveError(403, 'Request had insufficient authentication scopes.', 'insufficientPermissions');
+    if (method === 'get' && u.pathname === '/drive/v3/files') {
+      const pick = matchQuery(u.searchParams.get('q') || 'trashed = false');
+      return { code: 200, body: { files: state.drive.items.filter((it) => visible(it) && pick(it)).map((it) => ({ id: it.id, name: it.name })) } };
+    }
+    if (method === 'post' && u.pathname === '/drive/v3/files') {
+      const meta = JSON.parse(opts.payload || '{}');
+      const it = { id: 'd' + (++state.uid), name: meta.name, mimeType: meta.mimeType || 'application/octet-stream', parents: meta.parents || [], content: '', trashed: false, byApp: true };
+      state.drive.items.push(it); state.drive.writes++;
+      return { code: 200, body: { id: it.id } };
+    }
+    const m = /^\/(upload\/)?drive\/v3\/files\/([^/]+)$/.exec(u.pathname);
+    if (m) {
+      const it = state.drive.items.find((x) => x.id === decodeURIComponent(m[2]) && (x.byApp || driveFull()));
+      if (!it) return driveError(404, 'File not found: ' + m[2] + '.', 'notFound');
+      if (method === 'get' && u.searchParams.get('alt') === 'media') {
+        if (state.drive.failReads > 0) { state.drive.failReads--; return driveError(500, 'Internal Error', 'internalError'); }
+        state.drive.reads++;
+        return { code: 200, body: it.content };
+      }
+      if (method === 'get') return { code: 200, body: { id: it.id, trashed: it.trashed } };
+      if (method === 'patch' && m[1] && u.searchParams.get('uploadType') === 'media') {
+        if (String(opts.payload).length > 50 * 1024 * 1024) return driveError(413, 'Request too large', 'uploadTooLarge');
+        it.content = String(opts.payload); state.drive.writes++;
+        return { code: 200, body: { id: it.id } };
+      }
+    }
+    return driveError(400, 'sim: unsupported Drive call ' + method + ' ' + url, 'badRequest');
   };
-  sandbox.DriveApp = {
-    getFolderById: (id) => { const d = state.drive.folders.find((x) => x.id === id); if (!d) throw new Error('No item with the given ID could be found'); return d; },
-    getFoldersByName: (n) => iter(state.drive.folders.filter((d) => d.name === n)),
-    createFolder: (n) => makeFolder(n),
-  };
+  state.oauthToken = 'sim-oauth-token';
+  // DriveApp always needs the full Drive permission in real Apps Script.
+  sandbox.DriveApp = new Proxy({}, { get: (_, name) => () => need('DriveApp.' + String(name), 'drive') });
 
   const ctx = vm.createContext(sandbox);
   app.Date = vm.runInContext('Date', ctx);

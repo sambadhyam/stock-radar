@@ -56,7 +56,7 @@ Nothing in this system can place an order. Under SEBI's retail-algo rules, API o
 5. **Login.** Daily at 08:50 with client code, MPIN and a TOTP generated inside Apps Script (RFC 6238 with HMAC-SHA1). Re-login on any auth error.
 6. **One copy of the trading logic.** `core/core.js` is a plain script (no import/export) so the same file runs in the browser for backtests and is pasted unchanged into Apps Script as `Core.gs`.
 7. **Keys entry.** Keys are typed into a form opened from the sheet's Stock Radar menu and go straight into Script Properties, so they never sit in the code, the sheet or its version history. A manual fallback function exists for when the form can't open.
-8. **Security.** The Web App runs as the owner and requires the secret token on every call. Keys live only in Script Properties and are masked out of every log and message. The Angel One account holds no money. Portfolio data never goes into the public repo.
+8. **Security.** The Web App runs as the owner and requires the secret token on every call. Keys live only in Script Properties and are masked out of every log and message. The Angel One account holds no money. Portfolio data never goes into the public repo. Permissions are declared in `appsscript.json` and kept narrow: this spreadsheet only (`spreadsheets.currentonly`), Drive files the script created (`drive.file`, through the Drive web API because `DriveApp` would force full Drive access), dialogs, external requests, triggers, mail to the owner and the owner's email address.
 9. **English only.** Malayalam support was dropped at the owner's request in Phase 1.
 
 ---
@@ -181,7 +181,7 @@ stock-radar/
 |---|---|---|
 | 0 | Plan, verified facts, file tree, UI design preview | ✅ Done |
 | 1 | `setupSheets()`, providers, TOTP login, Telegram, scheduler, health log, test functions | ✅ Done (23 simulator tests) |
-| 2 | `core.js` indicators and strategies, intraday engine, EOD scans, alert logging, price history backfill | ✅ Done (55 simulator tests) |
+| 2 | `core.js` indicators and strategies, intraday engine, EOD scans, alert logging, price history backfill | ✅ Done (59 simulator tests) |
 | 3 | Evaluator, metrics, auto paper trading, graduation, daily, weekly and readiness reports | Next |
 | 4 | Web App API, PWA wired to live data, settings synced to the engine | |
 | 5 | Backtester and Backtest Baseline report, portfolio import, optional AI summaries | |

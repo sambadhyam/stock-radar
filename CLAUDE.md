@@ -26,6 +26,7 @@ Read `PLAN.md` first: it holds the architecture, verified API facts, quota budge
 - Stay with ES2015-era syntax in `.gs` (no optional chaining or `??`) to be safe on the V8 runtime.
 - Write text-like values (times, dates, tokens) into columns formatted as plain text (`setNumberFormat('@')`), or Sheets converts them.
 - Never log or show key values; pass messages through `Secrets.mask`.
+- Permissions are listed explicitly in `appsscript.json` (`oauthScopes`), so automatic detection is off. A new Google service means adding its scope there; the simulator refuses anything not listed. Keep them narrow: `spreadsheets.currentonly`, `drive.file`. Never use `DriveApp` (it forces access to the whole Drive); use `DriveFiles` in Signals.gs, which calls the Drive web API.
 - After any change in `apps-script/`, run `node tools/gas-sim/tests.mjs` and keep it green.
 
 ## Checking work

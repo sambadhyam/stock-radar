@@ -5,7 +5,71 @@
  *
  * Price history: one folder "Stock Radar Data" in your Drive with 12 small JSON files
  * (daily-00.json … daily-11.json). Each holds the daily candles of about 45 stocks.
+ * Drive is used through its web API with the "drive.file" permission, so this script can only
+ * see the files it created itself, never the rest of your Drive.
  */
+
+/* ============================== Google Drive (own files only) ============================== */
+
+var DriveFiles = {
+  API: 'https://www.googleapis.com/drive/v3/files',
+  UPLOAD: 'https://www.googleapis.com/upload/drive/v3/files',
+  FOLDER_TYPE: 'application/vnd.google-apps.folder',
+
+  /** One Drive API request with retries. Returns {code, text, json}; throws a plain-English error on failure. */
+  call: function (method, url, payload) {
+    var opts = { method: method, headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken() } };
+    if (payload !== undefined) { opts.payload = payload; opts.contentType = 'application/json'; }
+    // Creating is not retried, so a slow answer can never make two folders or files.
+    var res = Http.request(url, opts, { retries: method === 'post' ? 0 : 2 });
+    if (res.code >= 200 && res.code < 300) return res;
+    throw new Error('Google Drive: ' + this.why(res));
+  },
+
+  why: function (res) {
+    var e = res.json && res.json.error, msg = e && e.message ? e.message : String(res.text || '').slice(0, 200);
+    var all = msg + ' ' + JSON.stringify(e || {});
+    if (/has not been used|is disabled|accessNotConfigured|SERVICE_DISABLED/i.test(all)) {
+      return 'the Drive API is not switched on for this script. In Apps Script, click + next to Services, choose Drive API, then Add. (' + msg + ')';
+    }
+    if (res.code === 403 && /insufficient|scope|permission/i.test(all)) {
+      return 'Drive permission is missing. Paste the latest appsscript.json, then run Stock Radar → 6. Load price history and allow access. (' + msg + ')';
+    }
+    return (res.code ? 'HTTP ' + res.code + ': ' : '') + msg;
+  },
+
+  /** Files or folders this script created that match a Drive search, as [{id, name}]. */
+  find: function (query) {
+    var url = this.API + '?q=' + encodeURIComponent(query) + '&fields=' + encodeURIComponent('files(id,name)') + '&pageSize=100&spaces=drive';
+    return this.call('get', url).json.files || [];
+  },
+
+  exists: function (id) {
+    try { var r = this.call('get', this.API + '/' + encodeURIComponent(id) + '?fields=id,trashed'); return !!(r.json && r.json.id && !r.json.trashed); }
+    catch (e) { if (/HTTP 404/.test(e.message)) return false; throw e; }
+  },
+
+  createFolder: function (name) {
+    return this.call('post', this.API + '?fields=id', JSON.stringify({ name: name, mimeType: this.FOLDER_TYPE })).json.id;
+  },
+
+  createFile: function (folderId, name, text) {
+    var id = this.call('post', this.API + '?fields=id', JSON.stringify({ name: name, parents: [folderId], mimeType: 'application/json' })).json.id;
+    this.write(id, text);
+    return id;
+  },
+
+  /** A JSON file's content, parsed. Throws if it cannot be read, so a failed read never looks like an empty file. */
+  readJson: function (id) {
+    var r = this.call('get', this.API + '/' + encodeURIComponent(id) + '?alt=media');
+    if (!r.json) throw new Error('Google Drive: file ' + id + ' is not valid JSON (' + String(r.text || '').slice(0, 60) + ')');
+    return r.json;
+  },
+
+  write: function (id, text) {
+    this.call('patch', this.UPLOAD + '/' + encodeURIComponent(id) + '?uploadType=media', text);
+  },
+};
 
 /* ============================== Price history ============================== */
 
@@ -14,21 +78,32 @@ var History = {
   PACKS: 12,
   KEEP: 2600,                // up to about 10 years of daily candles per stock
   INDICES: ['NIFTY 50', 'INDIA VIX', 'NIFTY BANK'],
-  _folder: null,
+  _folderId: null,
+  _ids: null,
   _packs: {},
   _dirty: {},
 
-  folder: function () {
-    if (this._folder) return this._folder;
-    var p = Secrets.props(), id = p.getProperty('HIST_FOLDER_ID'), f = null;
-    if (id) { try { f = DriveApp.getFolderById(id); if (f.isTrashed && f.isTrashed()) f = null; } catch (e) { f = null; } }
-    if (!f) {
-      var it = DriveApp.getFoldersByName(this.FOLDER);
-      f = it.hasNext() ? it.next() : DriveApp.createFolder(this.FOLDER);
-      p.setProperty('HIST_FOLDER_ID', f.getId());
+  /** The "Stock Radar Data" folder this script made (created on first use). */
+  folderId: function () {
+    if (this._folderId) return this._folderId;
+    var p = Secrets.props(), id = p.getProperty('HIST_FOLDER_ID');
+    if (!(id && DriveFiles.exists(id))) {
+      var found = DriveFiles.find("name = '" + this.FOLDER + "' and mimeType = '" + DriveFiles.FOLDER_TYPE + "' and trashed = false");
+      id = found.length ? found[0].id : DriveFiles.createFolder(this.FOLDER);
+      p.setProperty('HIST_FOLDER_ID', id);
+      this._ids = null;
     }
-    this._folder = f;
-    return f;
+    this._folderId = id;
+    return id;
+  },
+
+  /** File name → id for the files in the folder (one request per run). */
+  fileIds: function () {
+    if (this._ids) return this._ids;
+    var ids = {};
+    DriveFiles.find("'" + this.folderId() + "' in parents and trashed = false").forEach(function (f) { ids[f.name] = f.id; });
+    this._ids = ids;
+    return ids;
   },
 
   /** Which of the 12 files a symbol lives in (a fixed hash, so no index file is needed). */
@@ -40,25 +115,21 @@ var History = {
 
   fileName: function (p) { return 'daily-' + (p < 10 ? '0' : '') + p + '.json'; },
 
-  file: function (p) {
-    var it = this.folder().getFilesByName(this.fileName(p));
-    return it.hasNext() ? it.next() : null;
-  },
-
   pack: function (p) {
     if (this._packs[p]) return this._packs[p];
-    var f = this.file(p), data = null;
-    if (f) { try { data = JSON.parse(f.getBlob().getDataAsString()); } catch (e) { data = null; } }
-    if (!data || !data.s) data = { v: 1, s: {} };
+    var id = this.fileIds()[this.fileName(p)];
+    var data = id ? DriveFiles.readJson(id) : { v: 1, s: {} };
+    if (!data.s) throw new Error('Google Drive: ' + this.fileName(p) + ' is not a Stock Radar price file');
     this._packs[p] = data;
     return data;
   },
 
   flush: function () {
-    var self = this, written = 0;
+    var self = this, written = 0, ids = this.fileIds();
     Object.keys(this._dirty).forEach(function (k) {
-      var p = Number(k), json = JSON.stringify(self._packs[p]), f = self.file(p);
-      if (f) f.setContent(json); else self.folder().createFile(self.fileName(p), json, 'application/json');
+      var p = Number(k), name = self.fileName(p), json = JSON.stringify(self._packs[p]);
+      if (ids[name]) DriveFiles.write(ids[name], json);
+      else ids[name] = DriveFiles.createFile(self.folderId(), name, json);
       written++;
     });
     this._dirty = {};
@@ -66,7 +137,7 @@ var History = {
   },
 
   /** Forget what was read in this run (tests use this; the next read comes from Drive again). */
-  reset: function () { this._packs = {}; this._dirty = {}; this._folder = null; },
+  reset: function () { this._packs = {}; this._dirty = {}; this._folderId = null; this._ids = null; },
 
   rec: function (symbol) { return this.pack(this.packOf(symbol)).s[symbol] || null; },
   has: function (symbol) { return !!this.rec(symbol); },

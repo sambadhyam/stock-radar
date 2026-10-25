@@ -12,7 +12,7 @@ Use Chrome with **⋮ → Desktop site** ticked for every step.
 | [Api.gs](Api.gs) | `Api` |
 | [Signals.gs](Signals.gs) | `Signals` (Phase 2) |
 | [Core.gs](Core.gs) | `Core` (Phase 2; the same file as `core/core.js`) |
-| [appsscript.json](appsscript.json) | `appsscript.json` (optional, sets India time) |
+| [appsscript.json](appsscript.json) | `appsscript.json` (required: India time and the exact permissions the engine may use) |
 
 ---
 
@@ -26,7 +26,7 @@ Use Chrome with **⋮ → Desktop site** ticked for every step.
    2. Tap the **copy icon** (two small squares) at the top right of the code. If you don't see it, tap **Raw**, then long-press → **Select all** → **Copy**.
    3. Back in Apps Script, open the matching file, tap in the code, long-press → **Select all**, then paste so it replaces everything.
 5. Tap the **Save** icon (floppy disk). There should be no red error underline.
-6. Recommended: tap the **gear icon** (Project Settings) → tick **Show "appsscript.json" manifest file in editor** → go back to the editor, open `appsscript.json`, replace its content with [appsscript.json](appsscript.json), and save. This sets the project to India time.
+6. Tap the **gear icon** (Project Settings) → tick **Show "appsscript.json" manifest file in editor** → go back to the editor, open `appsscript.json`, replace its content with [appsscript.json](appsscript.json), and save. This sets India time and limits what the script may access (see "Permissions" below). Under **Services** on the left you should now see **Drive**; if not, tap **+** next to Services → **Drive API** → **Add**.
 
 You never paste keys into these files.
 
@@ -59,6 +59,20 @@ Weekends and NSE holidays are skipped.
 
 ---
 
+## Permissions
+
+`appsscript.json` lists exactly what the engine may do, so Google asks only for these:
+
+| Permission | Why |
+|---|---|
+| Spreadsheets this script is installed in | Read and write the Stock Radar DB sheet only, no other spreadsheet |
+| Show prompts and sidebars | The keys form, test results and status boxes |
+| Connect to an external service | Angel One, Telegram, Google Finance, NSE |
+| Run when you are not present | The daily schedule |
+| Send email as you | The daily summary to your own address |
+| See your email address | To know where to send that summary |
+| Only the Drive files used with this app | The "Stock Radar Data" folder the script creates; it cannot see the rest of your Drive |
+
 ## Phase 2 update (if you set up Phase 1 already)
 
 1. Open the sheet → **Extensions → Apps Script**.
@@ -71,8 +85,9 @@ Weekends and NSE holidays are skipped.
    [Setup.gs](https://raw.githubusercontent.com/sambadhyam/stock-radar/main/apps-script/Setup.gs) → `Setup`.
    `Api.gs` and `appsscript.json` are unchanged.
 4. **Ctrl+S** to save. Go back to the sheet and reload it.
-5. **Stock Radar → 1. Create sheets.** This adds the strategy settings to **Config** and a row per strategy to **Strategies**. Your keys and settings are kept.
-6. **Stock Radar → 6. Load price history**, and allow the Drive permission.
+5. Paste [appsscript.json](https://raw.githubusercontent.com/sambadhyam/stock-radar/main/apps-script/appsscript.json) too (Project Settings → tick **Show "appsscript.json" manifest file in editor** first). Check that **Drive** appears under **Services**.
+6. **Stock Radar → 1. Create sheets.** This adds the strategy settings to **Config** and a row per strategy to **Strategies**. Your keys and settings are kept.
+7. **Stock Radar → 6. Load price history**, and allow the permissions (the Drive one says "only the specific Google Drive files you use with this app").
 
 Your daily schedule keeps running; there is no need to start it again.
 
@@ -139,6 +154,10 @@ Send me a screenshot of the results box (or the Checks sheet) when you're done.
 **Stopping everything.** Stock Radar → **Stop daily schedule**. Turn it back on with **5. Start daily schedule**.
 
 ---
+
+**Optional: drop permissions granted before.** Phase 1 was allowed to use all your spreadsheets. To remove that older permission: open [myaccount.google.com/connections](https://myaccount.google.com/connections) → **Stock Radar Engine** → delete the connection. Then in the sheet run any Stock Radar menu item and allow again (only the list above is asked for), and run **5. Start daily schedule** once more.
+
+**"Google Drive files" check fails.** If it says the Drive API is not switched on: in Apps Script tap **+** next to **Services** → **Drive API** → **Add**, then run the check again. If it says the permission is missing: paste the latest `appsscript.json`, then run **6. Load price history** and allow.
 
 ## Updating later
 
