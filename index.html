@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Stock Radar</title>
+  <meta name="description" content="Personal NSE stock analysis, alerts and self-checking paper trading.">
+  <meta name="theme-color" content="#EDF2F1" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#0E252C" media="(prefers-color-scheme: dark)">
+  <meta name="color-scheme" content="light dark">
+  <meta name="mobile-web-app-capable" content="yes">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="assets/icons/favicon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="assets/icons/icon-192.png">
+  <link rel="preload" href="assets/fonts/anek-latin.woff" as="font" type="font/woff" crossorigin>
+  <link rel="stylesheet" href="assets/css/app.css">
+  <script>
+    // Apply saved theme and language before first paint (no flash). Storage may be unavailable.
+    try {
+      var th = localStorage.getItem('sr.theme');
+      if (th === 'light' || th === 'dark') document.documentElement.setAttribute('data-theme', th);
+      if (localStorage.getItem('sr.lang') === 'ml') document.documentElement.lang = 'ml';
+    } catch (e) {}
+  </script>
+</head>
+<body>
+  <noscript><p style="padding:24px;font-family:sans-serif">Stock Radar needs JavaScript turned on.</p></noscript>
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
