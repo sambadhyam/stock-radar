@@ -6,7 +6,7 @@
  * This file holds no keys. Keys are saved privately with  Stock Radar → 2. Set up keys.
  */
 
-var SR_VERSION = '0.2.0';
+var SR_VERSION = '0.3.0';
 var IST = 'Asia/Kolkata';
 
 /* =============================== Settings =============================== */
@@ -27,9 +27,6 @@ var CONFIG_DEFAULTS = [
   ['swingUniverse', 'NIFTY200', 'Index scanned for swing setups'],
   ['mediumUniverse', 'NIFTY200', 'Index scanned for medium-term setups'],
   ['longUniverse', 'NIFTY500', 'Index scanned for long-term ideas'],
-  ['minRRIntraday', 1.5, 'Lowest reward-to-risk accepted for intraday signals'],
-  ['minRROther', 2, 'Lowest reward-to-risk accepted for swing, medium and long signals'],
-  ['minTradedValueCr', 10, 'Minimum 20-day average traded value in rupees crore (liquidity filter)'],
   ['noEntriesAfter', '14:30', 'No new intraday entries after this time (24-hour clock)'],
   ['squareOffAt', '15:10', 'Time of the intraday square-off reminder'],
   ['intradayExpiry', '15:15', 'Intraday signals and paper trades close at this time'],
@@ -40,6 +37,10 @@ var CONFIG_DEFAULTS = [
   ['graduationMinPF', 1.3, 'Profit factor needed for Live-ready'],
   ['graduationMaxDrawdownPct', 15, 'Largest paper drawdown allowed for Live-ready, in percent'],
   ['useInstrumentMaster', false, 'Use Angel One\'s big instrument file for stock tokens (slow; symbol search is used when FALSE)'],
+  ['intradayMaxSymbols', 60, 'Most stocks the intraday engine checks every 5 minutes'],
+  ['maxTelegramAlertsPerRun', 5, 'Most alert messages sent from one scan; the rest are listed in one extra message'],
+  ['maxTelegramAlertsPerDay', 40, 'Most alert messages sent in one day; everything is still logged in the Alerts sheet'],
+  ['historyDays', 660, 'Calendar days of daily candles loaded per stock (about 450 trading days)'],
   ['heartbeatMinutes', 5, 'How often the engine records a market snapshot during the session'],
   ['muhuratTrading', false, 'Run the engine in special weekend Muhurat sessions'],
   ['chargeBrokerageIntradayPct', 0.03, 'Zerodha intraday brokerage, percent per executed order'],
@@ -60,11 +61,18 @@ var CONFIG_DEFAULTS = [
 var Config = {
   _cache: null,
 
+  /** Every setting row: the engine's own plus the strategy parameters from Core.gs. */
+  defaultRows: function () {
+    var rows = CONFIG_DEFAULTS.slice();
+    if (typeof SRCore !== 'undefined') rows = rows.concat(SRCore.PARAMS);
+    return rows;
+  },
+
   /** All settings: defaults overlaid with the Config sheet. Read once per run. */
   all: function () {
     if (this._cache) return this._cache;
     var out = {};
-    CONFIG_DEFAULTS.forEach(function (r) { out[r[0]] = r[1]; });
+    this.defaultRows().forEach(function (r) { out[r[0]] = r[1]; });
     var sh = Store.sheet('Config');
     if (sh && sh.getLastRow() > 1) {
       sh.getRange(2, 1, sh.getLastRow() - 1, 2).getValues().forEach(function (r) {
@@ -670,6 +678,59 @@ var Angel = {
     if (!mon) return null;
     var pad = function (x) { return ('0' + x).slice(-2); };
     return new Date(m[3] + '-' + pad(mon) + '-' + pad(m[1]) + 'T' + m[4] + ':' + m[5] + ':' + m[6] + '+05:30').getTime();
+  },
+
+  /** Angel One candle rows [time, open, high, low, close, volume] → sorted candle objects. */
+  parseCandles: function (data) {
+    var rows = {};
+    (data || []).forEach(function (r) {
+      var t = new Date(r[0]).getTime();
+      if (isFinite(t)) rows[t] = { t: t, o: Number(r[1]), h: Number(r[2]), l: Number(r[3]), c: Number(r[4]), v: Number(r[5]) || 0 };
+    });
+    return Object.keys(rows).map(Number).sort(function (a, b) { return a - b; }).map(function (t) { return rows[t]; });
+  },
+
+  /**
+   * Candles for many instruments at once: three requests in parallel each second (Angel One allows 3 a second),
+   * retrying any that are rate-limited. Each item is {key, token, from, to} and must fit in one request.
+   * opts: {deadline (ms), batch, pause, onBatch}. Returns {data: {key: candles}, nodata: [keys], failed: {key: why}, left: [keys]}.
+   */
+  candlesMany: function (items, interval, opts) {
+    opts = opts || {};
+    var self = this, out = { data: {}, nodata: [], failed: {}, left: [] };
+    if (!items.length) return out;
+    var jwt = this.login(false), relogged = false, tries = {}, queue = items.slice(), batch = opts.batch || 3;
+    var fmt = function (d) { return Utilities.formatDate(new Date(d), IST, 'yyyy-MM-dd HH:mm'); };
+    while (queue.length) {
+      if (opts.deadline && Date.now() > opts.deadline) { out.left = queue.map(function (it) { return it.key; }); break; }
+      var group = queue.splice(0, batch), authFail = false;
+      var reqs = group.map(function (it) {
+        return {
+          url: self.BASE + self.ROUTES.candles, method: 'post', contentType: 'application/json', headers: self.headers(jwt), muteHttpExceptions: true,
+          payload: JSON.stringify({ exchange: 'NSE', symboltoken: String(it.token), interval: interval, fromdate: fmt(it.from), todate: fmt(it.to) }),
+        };
+      });
+      var resps = [];
+      try { resps = UrlFetchApp.fetchAll(reqs); } catch (e) { resps = []; }
+      group.forEach(function (it, k) {
+        var r = resps[k], res = { code: 0, text: '', json: null };
+        if (r) {
+          res.code = r.getResponseCode(); res.text = r.getContentText();
+          try { res.json = JSON.parse(res.text); } catch (e) { res.json = null; }
+        }
+        if (self.ok(res)) { out.data[it.key] = self.parseCandles(res.json.data); return; }
+        var msg = self.message(res);
+        if (/no data/i.test(msg)) { out.nodata.push(it.key); return; }
+        var limited = Http.retryable(res) || !r;
+        if (!limited && self.isAuthError(res) && !relogged) { authFail = true; queue.push(it); return; }
+        tries[it.key] = (tries[it.key] || 0) + 1;
+        if (tries[it.key] < 4) queue.push(it); else out.failed[it.key] = msg;
+      });
+      if (authFail) { jwt = this.login(true); relogged = true; }
+      if (opts.onBatch) opts.onBatch();
+      if (queue.length) Utilities.sleep(opts.pause || 1100);
+    }
+    return out;
   },
 
   /** Candles between two dates, requested in chunks Angel One accepts, merged and sorted. */

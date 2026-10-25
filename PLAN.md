@@ -4,7 +4,7 @@ Personal NSE analysis, alerts and self-checking paper trading. Phone-only workfl
 
 - **App:** https://sambadhyam.github.io/stock-radar/
 - **Repo:** `sambadhyam/stock-radar`
-- **Status:** Phase 1 complete (engine core in Apps Script). The app still shows sample data until Phase 4.
+- **Status:** Phase 2 complete (strategies, scans, alerts). The app still shows sample data until Phase 4.
 
 ---
 
@@ -51,8 +51,8 @@ Nothing in this system can place an order. Under SEBI's retail-algo rules, API o
 
 1. **Data sources.** Angel One is primary for live quotes and candles. Google Finance backs up current quotes only. Yahoo is last resort. Every number stores its source and timestamp; quotes older than the configured limit are rejected, and a gap of more than 2% between sources is flagged.
 2. **Trigger budget.** With 90 minutes of trigger time per day, the per-minute trigger exists only in market hours: a daily trigger creates it at 09:14 and the engine removes it after 15:30. Target ≤ 4 seconds per minute-run (about 25 minutes a day). The EOD scan is split across chained runs with a saved cursor.
-3. **Intraday method.** Each minute: one or two batched quote calls (≤ 60 symbols). Official 5-minute candles are fetched only for symbols with a setup forming. After the close, the evaluator re-checks every intraday alert against 1-minute candles to decide whether the target or the stop came first; if both fall in one candle, the stop is assumed.
-4. **Storage.** Alerts, paper trades, strategy status, settings and logs live in the Sheet. Multi-year daily price history lives in Drive as packed JSON files, which keeps the Sheet small and fast and feeds the in-app backtester.
+3. **Intraday method.** A minute after each 5-minute bar closes (09:21–14:31), official 5-minute candles for yesterday and today are fetched for every intraday stock (≤ 60, three requests a second in parallel) and the intraday strategies run on the bar that just closed. Bars more than 7 minutes old count as stale and are skipped. One alert per stock, strategy and direction per day. After the close, the Phase 3 evaluator re-checks every intraday alert against 1-minute candles to decide whether the target or the stop came first; if both fall in one candle, the stop is assumed.
+4. **Storage.** Alerts, paper trades, strategy status, settings and logs live in the Sheet. Daily price history lives in Drive (folder "Stock Radar Data") as 12 JSON files, each holding about 45 symbols chosen by a fixed hash, so no index file is needed. About 450 trading days are loaded at first (one Angel One request per symbol); the files can hold up to 10 years for the Phase 5 backtester. After each close the last 12 days are re-fetched and merged, so a provisional candle is corrected the next day.
 5. **Login.** Daily at 08:50 with client code, MPIN and a TOTP generated inside Apps Script (RFC 6238 with HMAC-SHA1). Re-login on any auth error.
 6. **One copy of the trading logic.** `core/core.js` is a plain script (no import/export) so the same file runs in the browser for backtests and is pasted unchanged into Apps Script as `Core.gs`.
 7. **Keys entry.** Keys are typed into a form opened from the sheet's Stock Radar menu and go straight into Script Properties, so they never sit in the code, the sheet or its version history. A manual fallback function exists for when the form can't open.
@@ -82,20 +82,44 @@ Other working assumptions: Muhurat trading is treated as a closed day for the en
 
 | Job | Runs per day | Time each | Trigger minutes |
 |---|---|---|---|
-| Intraday engine (09:15–15:30) | ~375 | ≤ 4 s | ~25 |
-| 5-min candle checks for active setups | ~75 | ≤ 3 s | ~4 |
-| Pre-market login + brief (08:50) | 1 | ≤ 30 s | 0.5 |
-| EOD fetch, scans, evaluator, paper trades (16:00) | 4–8 chained | ≤ 60 s | ~6 |
+| Minute ticks (snapshots, bookkeeping) | ~430 | ≤ 2 s | ~10 |
+| Intraday 5-minute scans (09:21–14:31) | 63 | ~25 s | ~26 |
+| Pre-market login, regime, brief (08:50) | 1 | ≤ 30 s | 0.5 |
+| EOD history update + scans + summary (16:00) | 1–3 chained | ≤ 4 min | ~5 |
 | Weekly report (Saturday) | 1 | ≤ 60 s | 1 |
-| **Total** | | | **~37 of 90** |
+| **Total** | | | **~43 of 90** |
 
-URL fetches: roughly 1,500 on a normal day against the 20,000 limit. The one-time history backfill (about 500 symbols) is spread over several runs.
+URL fetches: about 4,500 on a normal day (63 scans × up to 60 candle requests, plus about 520 at the close) against the 20,000 limit. The one-time history load (about 520 requests) takes one menu run plus one or two automatic follow-ups.
 
 ---
 
-## 6. Sheet tabs (created by `setupSheets()` in Phase 1)
+## 6. Sheet tabs (created by `setupSheets()`)
 
-`Config`, `Holidays`, `Symbols`, `Alerts`, `PaperTrades`, `Strategies`, `Checkpoints`, `Holdings`, `Fundamentals`, `Backtests`, `Reports`, `HealthLog`, `ErrorLog`.
+`Config`, `Holidays`, `Symbols`, `Alerts`, `PaperTrades`, `Strategies`, `Checkpoints`, `Holdings`, `Fundamentals`, `Backtests`, `Reports`, `HealthLog`, `ErrorLog`, `Checks`.
+
+Config also holds every strategy parameter (keys like `orb.volMult`), copied from `SRCore.PARAMS` in core.js. Strategies has one row per strategy (enabled, status, override).
+
+## 6a. Strategies (Phase 2)
+
+| id | Horizon | Rule in short | Target | Regimes |
+|---|---|---|---|---|
+| orb | Intraday | First close beyond the 15-minute opening range, volume ≥ 1.5× the last 20 bars, not more than half the range past it | Range height projected 1× / 2× | Buy: Bull, Neutral, High-vol. Short: Bear, Neutral, High-vol |
+| vwap | Intraday | Close back above (below) VWAP after ≥ 2 of the last 4 bars on the other side, on a green (red) bar | Day's high (low) so far | as orb |
+| ema-cross | Intraday | EMA 9 crosses EMA 21 on 5-minute bars, RSI(14) 50–70 (30–50 for shorts), price on the same side of VWAP | 2× / 3× risk | as orb |
+| gap | Intraday | Gap of 1–5% at the open. Go: first bar with the gap, then a break of the morning extreme without filling it. Fill: first bar against the gap, then a break the other way | Go: 2× / 3× risk. Fill: previous close | All |
+| base-breakout | Swing | Close above a 20-day base no wider than 12%, volume ≥ 1.5× the 20-day average, above the 50-day average | Base height 1× / 2× | Bull, Neutral |
+| ema-pullback | Swing | EMA 20 > EMA 50, 50-day average rising, low touches EMA 20 and closes above it on a green day, RSI(14) 40–65 | 20-day high | Bull, Neutral |
+| rsi2 | Swing | Above the 200-day average and RSI(2) < 10 | 10-day high | Bull, Neutral |
+| macd | Swing | MACD crosses above its signal; price and 50-day average above the 200-day | 2× / 3× risk | Bull, Neutral |
+| trend-template | Medium | Minervini template (price > 50 > 150 > 200-day, 200-day rising a month, ≥ 30% over the 52-week low, ≤ 25% under the high, RS ≥ 70), on the first day it is met | 2× / 3× risk | Bull, Neutral |
+| rs-leaders | Medium | Enters the top 20% of the universe for relative strength against Nifty 50 (weighted 3/6/9/12-month returns); price > 50-day > 200-day | 2× / 3× risk | Bull, Neutral |
+| near-high | Medium | First close within 3% of the 52-week high, volume ≥ average, above the 50-day | 2× / 3× risk | Bull, Neutral |
+| quality-value | Long | Fundamentals score ≥ 70 with ≥ 70% of the nine fields known, above the 200-day | 2× / 3× risk, judged mainly by checkpoints | All |
+| holding-guard | Long (exit) | A holding closes > 1% under its 200-day average, or through a trailing stop (22-day high close − 3 ATR) | — | All |
+
+Common checks (in `finalize`): levels rounded to the ₹0.05 tick (stops away from the entry, chart-level targets towards it, R-multiple targets computed from the rounded levels); reward-to-risk ≥ 1.5 intraday / 2 otherwise; stop distance under the horizon limit (2.5% / 8% / 15% / 25%); 20-day average traded value ≥ ₹10 crore; regime allowed. Confidence is the rule score until a strategy has paper trades, then blends in the record (up to half the weight at 30 trades).
+
+Regime: High-volatility when India VIX ≥ 20 (or up 30% in 5 days and ≥ 16); Bull when Nifty is above its 200-day average, the 50-day is above the 200-day and ≥ 50% of Nifty 200 stocks are above their 50-day; Bear when Nifty is below its 200-day and either the 50-day is below the 200-day or breadth is under 35%; otherwise Neutral. Unknown (no signals) until 200 days of Nifty history exist.
 
 ---
 
@@ -124,15 +148,17 @@ stock-radar/
 │   ├── api.js               (Phase 4) Apps Script client with offline cache
 │   ├── backtest.js          (Phase 5) in-browser backtester
 │   └── screens/             home, alerts, scan, results, more, settings
-├── core/core.js             (Phase 2) indicators, strategies, evaluator maths
+├── core/core.js             indicators, regime, strategies, checks, sizing, charges (SRCore)
 ├── apps-script/             files to paste into the Apps Script editor (README.md has the steps)
 │   ├── appsscript.json      manifest: Asia/Kolkata timezone, V8
 │   ├── Setup.gs             Stock Radar menu, sheet creation, keys form, setup checks, status
 │   ├── Data.gs              settings, storage, keys, TOTP, Angel One / Google / Yahoo with failover, calendar, stock lists
 │   ├── Engine.gs            schedule, daily tick (pre-market, snapshots, closing summary), job runner and failure alerts
 │   ├── Api.gs               Telegram and email (Web App API added in Phase 4)
-│   └── Core.gs              (Phase 2) identical copy of core/core.js
-├── tools/gas-sim/           Node simulator of Apps Script services + tests for apps-script/ (run: node tools/gas-sim/tests.mjs)
+│   ├── Signals.gs           Drive price history, regime, intraday and end-of-day scans, Alerts log and messages
+│   └── Core.gs              identical copy of core/core.js
+├── tools/gas-sim/           Node simulator of Apps Script services + tests for apps-script/ and core.js (run: node tools/gas-sim/tests.mjs)
+│                            scenarios.mjs holds the synthetic price series each strategy is tested on
 ├── PLAN.md                  this file
 ├── CLAUDE.md                conventions for future build sessions
 └── README.md
@@ -155,7 +181,7 @@ stock-radar/
 |---|---|---|
 | 0 | Plan, verified facts, file tree, UI design preview | ✅ Done |
 | 1 | `setupSheets()`, providers, TOTP login, Telegram, scheduler, health log, test functions | ✅ Done (23 simulator tests) |
-| 2 | `core.js` indicators and strategies, intraday engine, EOD scans, alert logging, price history backfill | Next |
-| 3 | Evaluator, metrics, auto paper trading, graduation, daily, weekly and readiness reports | |
+| 2 | `core.js` indicators and strategies, intraday engine, EOD scans, alert logging, price history backfill | ✅ Done (55 simulator tests) |
+| 3 | Evaluator, metrics, auto paper trading, graduation, daily, weekly and readiness reports | Next |
 | 4 | Web App API, PWA wired to live data, settings synced to the engine | |
 | 5 | Backtester and Backtest Baseline report, portfolio import, optional AI summaries | |

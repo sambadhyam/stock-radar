@@ -1,4 +1,4 @@
-# Engine setup (Phase 1)
+# Engine setup
 
 These files run in Google Apps Script, attached to your **Stock Radar DB** sheet. You copy them in once; after that everything is done from a **Stock Radar** menu inside the sheet.
 
@@ -10,6 +10,8 @@ Use Chrome with **⋮ → Desktop site** ticked for every step.
 | [Data.gs](Data.gs) | `Data` |
 | [Engine.gs](Engine.gs) | `Engine` |
 | [Api.gs](Api.gs) | `Api` |
+| [Signals.gs](Signals.gs) | `Signals` (Phase 2) |
+| [Core.gs](Core.gs) | `Core` (Phase 2; the same file as `core/core.js`) |
 | [appsscript.json](appsscript.json) | `appsscript.json` (optional, sets India time) |
 
 ---
@@ -18,7 +20,7 @@ Use Chrome with **⋮ → Desktop site** ticked for every step.
 
 1. Open your **Stock Radar DB** sheet → **Extensions → Apps Script**.
 2. Rename the starting file: tap **⋮** next to `Code.gs` → **Rename** → type `Setup` → Enter.
-3. Add three more files: tap **+** next to **Files** → **Script**, name it `Data`. Repeat for `Engine` and `Api`.
+3. Add the other files: tap **+** next to **Files** → **Script**, name it `Data`. Repeat for `Engine`, `Api`, `Signals` and `Core`.
 4. Fill each file, one at a time:
    1. In another tab, open the file on GitHub (links in the table above).
    2. Tap the **copy icon** (two small squares) at the top right of the code. If you don't see it, tap **Raw**, then long-press → **Select all** → **Copy**.
@@ -45,8 +47,49 @@ You never paste keys into these files.
 4. **Stock Radar → 3. Run all tests.** Takes 1–2 minutes. You get a results box, a Telegram message, a test email, and the same results in the **Checks** sheet.
 5. **Stock Radar → 4. Load stock lists.** Takes 1–3 minutes. Fills the **Symbols** sheet with Nifty 50/200/500 stocks, 3 core ETFs and the main indices.
 6. **Stock Radar → 5. Start daily schedule.**
+7. **Stock Radar → 6. Load price history.** Google asks for one more permission the first time (Drive, for the price files). About two years of daily candles for every stock go into a **Stock Radar Data** folder in your Drive. The first batch takes up to 4 minutes; the rest load by themselves, and Telegram tells you when it's done.
 
-**What happens next:** on every trading day you get a **pre-market check on Telegram at 08:50** and a **daily summary on Telegram and email after 16:00**. Weekends and NSE holidays are skipped. Phase 1 has no buy/sell signals yet; strategies arrive in Phase 2.
+**What happens next:** on every trading day:
+- **08:50** pre-market check on Telegram, with the market regime.
+- **09:21–14:31**, a minute after each 5-minute bar closes: the intraday scan of the Nifty 50 and your watchlist. Each signal is a Telegram message and a row in the **Alerts** sheet.
+- **15:10** square-off reminder, if intraday alerts went out.
+- **After 16:00** the price history is updated, the swing, medium-term and long-term scans run, and the daily summary arrives on Telegram and email.
+
+Weekends and NSE holidays are skipped.
+
+---
+
+## Phase 2 update (if you set up Phase 1 already)
+
+1. Open the sheet → **Extensions → Apps Script**.
+2. Add two new files: **+** next to **Files** → **Script** → name it `Signals`; again → `Core`.
+3. Paste these five files over what is there, one at a time (open the link, **Ctrl+A**, **Ctrl+C**; in Apps Script click in the file, **Ctrl+A**, **Ctrl+V**):
+   [Core.gs](https://raw.githubusercontent.com/sambadhyam/stock-radar/main/apps-script/Core.gs) →  `Core`,
+   [Signals.gs](https://raw.githubusercontent.com/sambadhyam/stock-radar/main/apps-script/Signals.gs) → `Signals`,
+   [Data.gs](https://raw.githubusercontent.com/sambadhyam/stock-radar/main/apps-script/Data.gs) → `Data`,
+   [Engine.gs](https://raw.githubusercontent.com/sambadhyam/stock-radar/main/apps-script/Engine.gs) → `Engine`,
+   [Setup.gs](https://raw.githubusercontent.com/sambadhyam/stock-radar/main/apps-script/Setup.gs) → `Setup`.
+   `Api.gs` and `appsscript.json` are unchanged.
+4. **Ctrl+S** to save. Go back to the sheet and reload it.
+5. **Stock Radar → 1. Create sheets.** This adds the strategy settings to **Config** and a row per strategy to **Strategies**. Your keys and settings are kept.
+6. **Stock Radar → 6. Load price history**, and allow the Drive permission.
+
+Your daily schedule keeps running; there is no need to start it again.
+
+## Strategies and settings
+
+The **Strategies** sheet has one row per strategy. Set **enabled** to FALSE to switch one off. Every strategy starts as **PAPER**: its alerts are labelled "PAPER — not for real money" until it has a track record (Phase 3). The **override** column lets you force a status (PAPER, LIVE_READY or REJECTED).
+
+Every threshold the strategies use is a row in **Config** (keys such as `orb.volMult` or `swing.holdDays`), with a description next to it. Change the value in column B; the next scan uses it.
+
+| Horizon | Strategies | Universe | When |
+|---|---|---|---|
+| Intraday | Opening-range breakout, VWAP reclaim, EMA 9/21 cross, Gap and go / gap fill | Nifty 50 + watchlist | After each 5-minute bar, 09:20–14:30; valid until 15:15 |
+| Swing (2–10 days) | Base breakout, Pullback to 20 EMA, RSI(2) dip in uptrend, MACD trend cross | Nifty 200 | After the close |
+| Medium (1–6 months) | Trend template, Relative strength leaders, Near 52-week high | Nifty 200 | After the close |
+| Long (12+ months) | Quality-value score (needs the Fundamentals sheet, Phase 5), Holding guard (exit warnings for stocks in the Holdings sheet) | Nifty 500 + ETFs | After the close |
+
+Every signal must pass: reward-to-risk of at least 1.5 (intraday) or 2 (others), an average traded value of at least ₹10 crore a day, a stop no further than the horizon's limit, and a market regime the strategy is allowed to trade in. Swing and medium buys need a Bull or Neutral regime; intraday buys are allowed in Bull, Neutral and High-volatility, intraday shorts in Bear, Neutral and High-volatility. No signals go out while the price history is missing or stale.
 
 ---
 

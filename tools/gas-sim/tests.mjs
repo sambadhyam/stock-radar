@@ -4,17 +4,19 @@ import crypto from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createSim } from './sim.mjs';
+import { coreTests } from './core-tests.mjs';
+import * as SC from './scenarios.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const FILES = path.join(here, '..', '..', 'apps-script');
 // Setup.gs first on purpose: the engine must not depend on the order files load in.
-const ORDER = ['Setup.gs', 'Engine.gs', 'Api.gs', 'Data.gs'];
+const ORDER = ['Setup.gs', 'Signals.gs', 'Engine.gs', 'Api.gs', 'Data.gs', 'Core.gs'];
 
 let passed = 0, failed = 0;
 const results = [];
 function test(name, fn) {
   try { fn(); passed++; results.push('  ✓ ' + name); }
-  catch (e) { failed++; results.push('  ✗ ' + name + '\n      ' + (e && e.stack ? e.stack.split('\n').slice(0, 4).join('\n      ') : e)); }
+  catch (e) { failed++; results.push('  ✗ ' + name + '\n      ' + (e && e.stack ? e.stack.split('\n').slice(0, process.env.FULL ? 200 : 4).join('\n      ') : e)); }
 }
 function eq(a, b, msg) { if (a !== b) throw new Error((msg || 'expected equal') + `: got ${JSON.stringify(a)}, want ${JSON.stringify(b)}`); }
 function ok(v, msg) { if (!v) throw new Error(msg || 'expected truthy'); }
@@ -106,6 +108,12 @@ function world(sim, opts = {}) {
       if (route.endsWith('getCandleData')) {
         w.candleCalls.push(body);
         const from = new Date(body.fromdate.replace(' ', 'T') + ':00+05:30'), to = new Date(body.todate.replace(' ', 'T') + ':00+05:30');
+        if (w.rateLimitNext > 0) { w.rateLimitNext--; return { code: 403, body: { status: false, message: 'Access denied because of exceeding access rate', errorcode: 'AB1019' } }; }
+        const custom = w.candleGen && w.candleGen(body.symboltoken, body.interval, from, to);
+        if (custom) {
+          const rows = custom.filter((c) => c.t >= from.getTime() && c.t <= to.getTime()).map((c) => [new Date(c.t).toISOString(), c.o, c.h, c.l, c.c, c.v]);
+          return rows.length ? { code: 200, body: { status: true, data: rows } } : { code: 200, body: { status: false, message: 'No Data Available', errorcode: 'AB1004' } };
+        }
         const days = (to - from) / 86400000;
         const max = { ONE_MINUTE: 30, FIVE_MINUTE: 90, ONE_DAY: 2000 }[body.interval];
         if (days > max) return { code: 200, body: { status: false, message: 'Invalid date range', errorcode: 'AB1006' } };
@@ -164,7 +172,7 @@ test('files load in any order and the menu is created', () => {
   const { sim, G } = fresh();
   sim.state.uiAvailable = true;
   G.onOpen();
-  eq(sim.state.menu.items.length, 8, 'menu items');
+  eq(sim.state.menu.items.length, 9, 'menu items');
   eq(sim.state.menu.items[0][1], 'menuCreateSheets');
 });
 
@@ -184,7 +192,8 @@ test('setupSheets creates every sheet, keeps text values as text, and is safe to
   ok(!sim.ss.getSheetByName('Sheet1'), 'default sheet removed');
   eq(sim.ss.tz, 'Asia/Kolkata', 'spreadsheet time zone');
   const cfg = sim.ss.getSheetByName('Config').dump();
-  eq(cfg.length - 1, G.CONFIG_DEFAULTS.length, 'config rows');
+  eq(cfg.length - 1, G.Config.defaultRows().length, 'config rows');
+  ok(cfg.some((r) => r[0] === 'orb.volMult'), 'strategy parameters are in Config');
   G.Config._cache = null;
   eq(G.Config.get('noEntriesAfter'), '14:30', 'time stays text');
   eq(G.Config.get('realCapital'), 100000, 'number');
@@ -195,7 +204,7 @@ test('setupSheets creates every sheet, keeps text values as text, and is safe to
   eq(typeof hol[1][0], 'string', 'holiday dates stay text');
   const r2 = G.setupSheets();
   eq(r2.created.length, 0, 'nothing new on re-run');
-  eq(sim.ss.getSheetByName('Config').dump().length - 1, G.CONFIG_DEFAULTS.length, 'no duplicate settings');
+  eq(sim.ss.getSheetByName('Config').dump().length - 1, G.Config.defaultRows().length, 'no duplicate settings');
   eq(sim.ss.getSheetByName('Holidays').dump().length - 1, 16, 'no duplicate holidays');
   ok(sim.state.props.get('APP_TOKEN').length >= 40, 'app token created');
 });
@@ -469,6 +478,215 @@ test('menu actions work from the editor too (alerts fall back to the log)', () =
   G.menuCreateSheets();
   ok(sim.state.logs.some((l) => /Sheets are ready/.test(l)), 'logged instead of alert');
 });
+
+// =================== Phase 2: history, scans, alerts ===================
+
+/** A world where Nifty is in an uptrend, VIX is calm, and chosen stocks follow chosen scenarios. */
+function marketWorld(opts = {}) {
+  const env = fresh(opts);
+  const { G, w } = env;
+  G.setupSheets(); G.saveSecretsFromDialog(KEYS); G.SymbolsDb.rebuild();
+  const end = opts.end || '2026-10-23';
+  const nifty = SC.dailyFrom(SC.trend(300, 20000, 0.08), { end, vol: 0 });
+  const vix = SC.dailyFrom(Array.from({ length: 300 }, () => 12.5), { end, vol: 0 });
+  const quiet = SC.dailyFrom(SC.trend(300, 100, 0.01), { end, vol: 2e6 }); // liquid but going nowhere
+  w.daily = { '99926000': nifty, '99926017': vix, ...(opts.daily || {}) };
+  w.intra = opts.intra || {};
+  w.candleGen = (token, interval) => {
+    if (interval === 'ONE_DAY') return w.daily[token] || (BY_TOKEN[token] && opts.allQuiet !== false ? quiet : null);
+    if (interval === 'FIVE_MINUTE') return w.intra[token] || null;
+    return null;
+  };
+  return env;
+}
+const tickAtDay = (G, ymd, hhmm) => { G.MarketCal._now = at(ymd + 'T' + hhmm + ':00+05:30'); G.Config._cache = null; G.StrategyBook._map = null; G.engineTick(); };
+const alertsRows = (sim) => { const d = sim.ss.getSheetByName('Alerts').dump(); const h = d[0]; return d.slice(1).map((r) => Object.fromEntries(h.map((k, i) => [k, r[i]]))); };
+
+test('price history: the menu loads every stock into 12 Drive files and reports on Telegram', () => {
+  const { G, sim, w } = marketWorld();
+  sim.state.uiAvailable = true;
+  G.MarketCal._now = at('2026-10-25T21:00:00+05:30');
+  const r = G.loadHistory();
+  eq(r.remaining, 0, 'all loaded');
+  eq(r.symbols, 500 + 3 + 3, 'stocks, ETFs and the three indices');
+  const folder = sim.state.drive.folders.find((f) => f.name === 'Stock Radar Data');
+  ok(folder, 'Drive folder created');
+  const files = sim.state.drive.files.filter((f) => f.folder === folder).map((f) => f.name).sort();
+  eq(files.length, 12, 'twelve files'); eq(files[0], 'daily-00.json');
+  ok(files.every((n) => /^daily-\d\d\.json$/.test(n)), files.join());
+  const sizes = sim.state.drive.files.filter((f) => f.folder === folder).map((f) => f.content.length);
+  const total = sizes.reduce((a, b) => a + b, 0);
+  if (process.env.SIZES) console.log('pack sizes (KB):', sizes.map((x) => Math.round(x / 1024)).join(' '), 'total MB', (total / 1048576).toFixed(1));
+  ok(Math.max(...sizes) < 1.5 * 1048576, 'each file stays small: ' + Math.max(...sizes));
+  ok(sim.state.alerts.some((a) => /Price history ready/.test(a.title)), 'dialog');
+  ok(w.telegram.some((t) => /Price history ready/.test(t) && /Market regime/.test(t)), 'telegram: ' + w.telegram.join(' / '));
+  ok(w.candleCalls.every((c) => c.interval === 'ONE_DAY'), 'daily candles only');
+  // A fresh run reads the same data back from Drive.
+  G.History.reset();
+  const k = G.History.get('NIFTY 50');
+  ok(k.length === 300 && k[k.length - 1].c > 20000, 'Nifty history: ' + k.length);
+  eq(G.History.lastDay('NIFTY 50'), 20261023, 'newest day');
+  eq(G.Market.saved().state, 'BULL', 'regime saved');
+  const again = G.loadHistory();
+  eq(again.loaded, 0, 'nothing to load the second time');
+});
+
+test('price history: rate-limited requests are retried, and the load continues in the background', () => {
+  const { G, sim, w } = marketWorld();
+  G.MarketCal._now = at('2026-10-25T21:00:00+05:30');
+  w.rateLimitNext = 5;
+  const part = G.Backfill.step(Date.now() + 60000);
+  eq(part.remaining, 0, 'retries recovered every rate-limited request');
+  G.History.scheduleContinue();
+  ok(sim.state.triggers.some((t) => t.handler === 'continueHistory' && t.spec.after === 60000), 'one-off follow-up in a minute');
+  G.continueHistory();
+  ok(!sim.state.triggers.some((t) => t.handler === 'continueHistory'), 'follow-up removed when done');
+  ok(w.telegram.some((t) => /Price history ready/.test(t)), 'done message');
+});
+
+test('strategies sheet: one row per strategy, and a strategy switched off there stays silent', () => {
+  const { G, sim } = marketWorld();
+  const rows = sim.ss.getSheetByName('Strategies').dump();
+  eq(rows.length - 1, G.SRCore.STRATEGIES.length, 'thirteen strategies');
+  ok(rows.slice(1).every((r) => r[4] === 'PAPER'), 'all start as paper');
+  eq(G.StrategyBook.enabled(['INTRADAY']).length, 4);
+  const i = rows.findIndex((r) => r[0] === 'orb');
+  sim.ss.getSheetByName('Strategies').getRange(i + 1, 4).setValues([['FALSE']]);
+  G.StrategyBook._map = null;
+  ok(G.StrategyBook.enabled(['INTRADAY']).indexOf('orb') < 0, 'orb off');
+  eq(G.setupSheets().strategiesAdded, 0, 'no duplicates on re-run');
+});
+
+test('a trading day with an opening-range breakout: one alert, logged and sent, then the square-off reminder', () => {
+  const tcs = SC.intraday.orb(); // 5-minute bars for Fri 23 Oct and Mon 26 Oct
+  const { G, sim, w } = marketWorld({ intra: { [TOKENS.TCS]: tcs } });
+  G.MarketCal._now = at('2026-10-25T21:00:00+05:30');
+  G.loadHistory();
+  G.Schedule.install();
+  const day = '2026-10-26';
+  tickAtDay(G, day, '08:50');
+  const brief = w.telegram[w.telegram.length - 1];
+  ok(/Pre-market check/.test(brief) && /Market regime/.test(brief) && /Intraday: 5\d stocks, 4 strategies/.test(brief), brief);
+  const ctx = JSON.parse(sim.state.props.get('INTRA_CTX'));
+  eq(ctx.day, day); ok(ctx.s.TCS && ctx.s.TCS[1] >= 10, 'TCS liquid: ' + JSON.stringify(ctx.s.TCS));
+  const sent0 = w.telegram.length;
+  for (const t of ['09:16', '09:21', '09:26', '09:31', '09:36', '09:41']) tickAtDay(G, day, t);
+  eq(w.telegram.length, sent0, 'no breakout yet');
+  ok(w.candleCalls.some((c) => c.interval === 'FIVE_MINUTE'), 'five-minute candles fetched');
+  tickAtDay(G, day, '09:46'); // the 09:40–09:45 bar has closed
+  const alertMsg = w.telegram.slice(sent0).join('\n');
+  ok(/PAPER — not for real money/.test(alertMsg) && /BUY TCS/.test(alertMsg) && /Opening-range breakout/.test(alertMsg), alertMsg);
+  ok(/Entry ₹1\d\d\.\d\d – ₹/.test(alertMsg) && /Reward:risk/.test(alertMsg) && /Size: \d+ shares/.test(alertMsg) && /Today until 15:15/.test(alertMsg), alertMsg);
+  let rows = alertsRows(sim);
+  eq(rows.length, 1, 'one alert logged');
+  const a = rows[0];
+  eq(a.symbol, 'TCS'); eq(a.horizon, 'INTRADAY'); eq(a.strategy, 'orb'); eq(a.direction, 'BUY'); eq(a.status, 'OPEN'); eq(a.telegram, 'sent');
+  ok(a.stop < a.entryLow && a.target1 > a.entryHigh && a.rr >= 1.5 && a.qty > 0, JSON.stringify(a));
+  ok(/Angel One 5-minute candles to 09:45/.test(a.source), a.source);
+  tickAtDay(G, day, '09:51'); // same bar is still the latest: no repeat
+  eq(alertsRows(sim).length, 1, 'not repeated');
+  const callsBefore = w.candleCalls.length;
+  tickAtDay(G, day, '14:36');
+  eq(w.candleCalls.length, callsBefore, 'no intraday scans after 14:30');
+  tickAtDay(G, day, '15:10');
+  ok(w.telegram.some((t) => /Square-off reminder/.test(t) && /BUY TCS/.test(t)), 'square-off reminder');
+});
+
+test('end of day: history update, regime, swing scan, alert and closing summary', () => {
+  const end = '2026-10-26';
+  const rel = SC.daily['base-breakout']().map((c) => c); // ends on 26 Oct
+  const { G, sim, w } = marketWorld({ daily: { [TOKENS.RELIANCE]: rel } });
+  // History as it stood on Friday evening, then Monday's close arrives at 16:00.
+  w.daily['99926000'] = SC.dailyFrom(SC.trend(300, 20000, 0.08), { end, vol: 0 });
+  w.daily['99926017'] = SC.dailyFrom(Array.from({ length: 300 }, () => 12.5), { end, vol: 0 });
+  G.MarketCal._now = at('2026-10-23T21:00:00+05:30');
+  G.loadHistory();
+  eq(G.History.lastDay('RELIANCE'), 20261023, 'Friday history');
+  G.MarketCal._now = at('2026-10-26T08:20:00+05:30');
+  G.Schedule.install();
+  tickAtDay(G, end, '08:50');
+  const sent0 = w.telegram.length;
+  tickAtDay(G, end, '16:00');
+  eq(G.History.lastDay('RELIANCE'), 20261026, 'history updated with today');
+  const day = JSON.parse(sim.state.props.get('DAY_STATE'));
+  ok(day.eod, 'end of day finished: ' + JSON.stringify(day));
+  const msgs = w.telegram.slice(sent0).join('\n----\n');
+  ok(/BUY RELIANCE/.test(msgs) && /Base breakout/.test(msgs) && /Swing/.test(msgs) && /10 trading days/.test(msgs), msgs);
+  ok(/Daily summary/.test(msgs) && /Signals today: 3<\/b> \(2 medium term, 1 swing\)/.test(msgs) && /Market regime/.test(msgs), msgs);
+  // A strong breakout to a new high also meets the trend template and the near-high rule; each strategy logs its own alert.
+  const rows = alertsRows(sim);
+  eq(rows.map((r) => r.strategy).sort().join(), 'base-breakout,near-high,trend-template');
+  const bb = rows.find((r) => r.strategy === 'base-breakout');
+  eq(bb.symbol, 'RELIANCE'); eq(bb.horizon, 'SWING'); eq(bb.telegram, 'sent');
+  ok(Object.prototype.toString.call(bb.validTill) === '[object Date]', 'valid-till date');
+  ok(!sim.state.triggers.some((t) => t.handler === 'engineTick'), 'tick stopped');
+  // The next day the same setup is inside its cooldown, so it is not alerted again.
+  const sig = { symbol: 'RELIANCE', strategy: 'base-breakout', horizon: 'SWING', direction: 'BUY' };
+  G.MarketCal._now = at('2026-10-27T16:05:00+05:30');
+  eq(G.AlertBook.withoutRepeats([sig], G.Scans.params()).length, 0, 'cooldown');
+  G.MarketCal._now = at('2026-11-12T16:05:00+05:30');
+  eq(G.AlertBook.withoutRepeats([sig], G.Scans.params()).length, 1, 'after the cooldown');
+});
+
+test('end of day waits for Angel One to publish today\'s candle, then gives up at 16:45', () => {
+  const { G, sim, w } = marketWorld(); // all history ends on Friday 23 Oct
+  G.MarketCal._now = at('2026-10-23T21:00:00+05:30');
+  G.loadHistory();
+  G.MarketCal._now = at('2026-10-26T08:20:00+05:30');
+  G.Schedule.install();
+  tickAtDay(G, '2026-10-26', '08:50');
+  const sent0 = w.telegram.length;
+  tickAtDay(G, '2026-10-26', '16:00');
+  tickAtDay(G, '2026-10-26', '16:20');
+  eq(w.telegram.length, sent0, 'still waiting');
+  tickAtDay(G, '2026-10-26', '16:46');
+  const msg = w.telegram.slice(sent0).join('\n');
+  ok(/Daily summary/.test(msg) && /had not published/.test(msg), msg);
+});
+
+test('no signals while the regime is unknown, and the brief says what to do', () => {
+  const { G, sim, w } = fresh();
+  G.setupSheets(); G.saveSecretsFromDialog(KEYS); G.SymbolsDb.rebuild();
+  G.MarketCal._now = at('2026-10-26T08:20:00+05:30');
+  G.Schedule.install();
+  tickAtDay(G, '2026-10-26', '08:50');
+  ok(/6\. Load price history/.test(w.telegram[w.telegram.length - 1]), w.telegram[w.telegram.length - 1]);
+  const calls = w.candleCalls.length;
+  tickAtDay(G, '2026-10-26', '09:46');
+  eq(w.candleCalls.length, calls, 'no candle requests without a regime');
+});
+
+test('alert messages respect the per-run limit and the paper switch', () => {
+  const { G, sim, w } = marketWorld();
+  const mk = (sym, conf) => ({ symbol: sym, strategy: 'orb', strategyName: 'Opening-range breakout', horizon: 'INTRADAY', direction: 'BUY', entry: 100, entryLow: 99.9, entryHigh: 100, stop: 99, target1: 102, target2: 103, rr: 2, riskPct: 1, confidence: conf, reasons: ['Test reason'], barTime: Date.now(), barEnd: '10:00', tradedValueCr: 50 });
+  G.MarketCal._now = at('2026-10-26T10:01:00+05:30');
+  const sigs = Array.from({ length: 8 }, (_, i) => mk('BIG00' + (i + 1), 50 + i));
+  const before = w.telegram.length;
+  const out = G.AlertBook.publish(sigs, { nowMs: G.MarketCal._now, source: 'Test' });
+  eq(out.logged, 8); eq(out.sent, 5, 'five individual messages');
+  const extra = w.telegram.slice(before);
+  eq(extra.length, 6, 'plus one list of the rest');
+  ok(/3 more signals/.test(extra[5]), extra[5]);
+  ok(/BIG008/.test(extra[0]), 'highest confidence first');
+  const sh = sim.ss.getSheetByName('Config'), cfg = sh.dump(), r = cfg.findIndex((x) => x[0] === 'paperAlerts');
+  sh.getRange(r + 1, 2).setValues([['FALSE']]); G.Config._cache = null;
+  const b2 = w.telegram.length;
+  G.AlertBook.publish([mk('BIG009', 70)], { nowMs: G.MarketCal._now + 60000, source: 'Test' });
+  eq(w.telegram.length, b2, 'paper alerts switched off: logged only');
+  ok(alertsRows(sim).some((a) => a.symbol === 'BIG009' && /paper alerts off/.test(a.telegram)), 'reason recorded');
+});
+
+test('status shows price history, regime and strategies', () => {
+  const { G, sim } = marketWorld();
+  G.MarketCal._now = at('2026-10-25T21:00:00+05:30');
+  G.loadHistory();
+  sim.state.uiAvailable = true;
+  G.showStatus();
+  const html = sim.state.dialogs[sim.state.dialogs.length - 1].html;
+  ok(/506 stocks and indices/.test(html) && /Bull \(as of Fri 23 Oct\)/.test(html) && /13 of 13/.test(html), html.split('<body>')[1].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' '));
+});
+
+coreTests({ test, eq, ok, root: path.join(here, '..', '..') });
 
 console.log(results.join('\n'));
 console.log(`\n${passed} passed, ${failed} failed`);

@@ -4,6 +4,7 @@
  *
  * Use the menu in this order the first time:
  *   1. Create sheets   2. Set up keys   3. Run all tests   4. Load stock lists   5. Start daily schedule
+ *   6. Load price history
  */
 
 /** Adds the Stock Radar menu whenever the sheet is opened. */
@@ -14,6 +15,7 @@ function onOpen() {
     .addItem('3. Run all tests', 'runAllTests')
     .addItem('4. Load stock lists', 'loadSymbols')
     .addItem('5. Start daily schedule', 'installSchedule')
+    .addItem('6. Load price history', 'loadHistory')
     .addSeparator()
     .addItem('Status', 'showStatus')
     .addItem('Send a test Telegram message', 'testTelegram')
@@ -80,8 +82,11 @@ function setupSheets() {
   // Default settings: add any that are missing, never overwrite yours.
   var cfg = ss.getSheetByName('Config');
   var haveKeys = cfg.getLastRow() > 1 ? cfg.getRange(2, 1, cfg.getLastRow() - 1, 1).getValues().map(function (r) { return String(r[0]); }) : [];
-  var newCfg = CONFIG_DEFAULTS.filter(function (r) { return haveKeys.indexOf(r[0]) < 0; }).map(function (r) { return [r[0], String(r[1]), r[2]]; });
+  var newCfg = Config.defaultRows().filter(function (r) { return haveKeys.indexOf(r[0]) < 0; }).map(function (r) { return [r[0], String(r[1]), r[2]]; });
   if (newCfg.length) Store.append('Config', newCfg);
+
+  // One row per strategy in the Strategies sheet (switch on/off and override status there).
+  var strategiesAdded = StrategyBook.seed();
 
   // Holidays: add the 2026 list where missing.
   var hol = ss.getSheetByName('Holidays');
@@ -100,7 +105,7 @@ function setupSheets() {
   Secrets.appToken();
   Config._cache = null;
   MarketCal._holidays = null;
-  return { created: created, updated: updated, settingsAdded: newCfg.length, holidaysAdded: newHol.length };
+  return { created: created, updated: updated, settingsAdded: newCfg.length, holidaysAdded: newHol.length, strategiesAdded: strategiesAdded };
 }
 
 function menuCreateSheets() {
@@ -108,7 +113,8 @@ function menuCreateSheets() {
   Ui.alert('Sheets are ready',
     (r.created.length ? 'Created: ' + r.created.join(', ') + '.\n\n' : 'All sheets were already there.\n\n') +
     (r.updated.length ? 'Added new columns to: ' + r.updated.join(', ') + '.\n\n' : '') +
-    'Settings added: ' + r.settingsAdded + '. Holidays added: ' + r.holidaysAdded + '.\n\nNext: Stock Radar → 2. Set up keys.');
+    'Settings added: ' + r.settingsAdded + '. Holidays added: ' + r.holidaysAdded + '. Strategies added: ' + r.strategiesAdded + '.\n\n' +
+    (Secrets.missing().length ? 'Next: Stock Radar → 2. Set up keys.' : 'Your keys are already saved.'));
 }
 
 /* ============================ Keys form ============================ */
@@ -404,6 +410,17 @@ var Setup = {
     return line;
   },
 
+  historyLine: function () {
+    var m = History.meta();
+    if (!m || !m.symbols) return 'Not loaded yet: use Stock Radar → 6. Load price history';
+    return m.symbols + ' stocks and indices, up to ' + (m.last ? Fmt.day(History.dayToYmd(m.last)) : '—');
+  },
+
+  regimeLine: function () {
+    var r = Market.saved();
+    return r ? SRCore.regimeName(r.state) + (r.asOfDay ? ' (as of ' + Fmt.day(History.dayToYmd(r.asOfDay)) + ')' : '') : 'Not worked out yet';
+  },
+
   CSS: 'body{font-family:Roboto,Arial,sans-serif;margin:0;padding:2px 2px 18px;color:#0E242B;font-size:14px;line-height:1.45}' +
     'h3{font-size:15px;margin:16px 0 6px}p{margin:0 0 10px}.muted{color:#58727A}' +
     '.f{margin:0 0 14px}label{display:flex;justify-content:space-between;gap:8px;font-weight:600;margin-bottom:4px}' +
@@ -475,6 +492,9 @@ var Setup = {
       li('Daily schedule', sched.kickoffs ? 'On' + (sched.tickRunning ? ', running now' : ', waiting for the next trading morning') : 'Off') +
       li('Angel One session', sess.jwt && sess.day === today ? 'Logged in today at ' + Utilities.formatDate(new Date(sess.at), IST, 'HH:mm') : 'Not logged in today') +
       li('Market', MarketCal.marketState() + ' (' + Fmt.day(today) + ')') +
+      li('Price history', Setup.historyLine()) +
+      li('Market regime', Setup.regimeLine()) +
+      li('Strategies on', String(StrategyBook.enabled(['INTRADAY', 'SWING', 'MEDIUM', 'LONG']).length) + ' of ' + SRCore.STRATEGIES.length) +
       li('Emails left today', String(MailApp.getRemainingDailyQuota())) +
       li('App token (for Phase 4)', 'Saved, shown when the app is connected') +
       '</table><h3>Last runs</h3><table>' + (jobRows || li('No runs yet', 'They appear after the schedule starts')) + '</table></body></html>';

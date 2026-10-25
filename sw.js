@@ -2,7 +2,7 @@
 // App code (HTML, JS, CSS) is network-first so updates show up straight away, with the cached copy
 // used when offline or when the network takes longer than 3 seconds. Fonts and icons are cache-first.
 // Backend API calls (Phase 4) go to another origin and are never touched here.
-const VERSION = 'sr-0.2.0';
+const VERSION = 'sr-0.3.0';
 const ASSETS = [
   './',
   'index.html',
@@ -28,6 +28,7 @@ const ASSETS = [
   'js/screens/results.js',
   'js/screens/more.js',
   'js/screens/settings.js',
+  'core/core.js',
 ];
 
 self.addEventListener('install', (event) => {

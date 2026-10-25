@@ -269,6 +269,37 @@ export function createSim({ files, order }) {
     },
     Session: { getEffectiveUser: () => ({ getEmail: () => 'owner@example.com' }) },
   };
+  // ---------------- Drive (folders and files kept in memory) ----------------
+  state.drive = { folders: [], files: [], reads: 0, writes: 0 };
+  const iter = (arr) => { let i = 0; return { hasNext: () => i < arr.length, next: () => arr[i++] }; };
+  const makeFile = (name, content, folder) => {
+    const f = {
+      id: 'file' + (++state.uid), name, content: String(content), folder,
+      getId: () => f.id, getName: () => f.name, isTrashed: () => false,
+      getBlob: () => ({ getDataAsString: () => { state.drive.reads++; return f.content; } }),
+      setContent: (c) => { if (String(c).length > 50 * 1024 * 1024) throw new Error('File too large'); state.drive.writes++; f.content = String(c); return f; },
+      getSize: () => f.content.length,
+    };
+    state.drive.files.push(f);
+    return f;
+  };
+  const makeFolder = (name) => {
+    const d = {
+      id: 'folder' + (++state.uid), name,
+      getId: () => d.id, getName: () => d.name, isTrashed: () => false,
+      getFilesByName: (n) => iter(state.drive.files.filter((f) => f.folder === d && f.name === n)),
+      getFiles: () => iter(state.drive.files.filter((f) => f.folder === d)),
+      createFile: (n, c) => { state.drive.writes++; return makeFile(n, c, d); },
+    };
+    state.drive.folders.push(d);
+    return d;
+  };
+  sandbox.DriveApp = {
+    getFolderById: (id) => { const d = state.drive.folders.find((x) => x.id === id); if (!d) throw new Error('No item with the given ID could be found'); return d; },
+    getFoldersByName: (n) => iter(state.drive.folders.filter((d) => d.name === n)),
+    createFolder: (n) => makeFolder(n),
+  };
+
   const ctx = vm.createContext(sandbox);
   app.Date = vm.runInContext('Date', ctx);
   // Load files the way Apps Script does: each file is its own script in one shared global scope.

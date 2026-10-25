@@ -11,7 +11,8 @@ Read `PLAN.md` first: it holds the architecture, verified API facts, quota budge
 ## Rules
 - No build step. Vanilla JS ES modules in the browser; plain scripts in Apps Script (V8).
 - Never commit secrets, tokens, personal holdings or account data. Secrets live in Apps Script Script Properties only.
-- `core/core.js` and `apps-script/Core.gs` must stay byte-identical: no `import`/`export`, no DOM, no Apps Script services inside.
+- `core/core.js` and `apps-script/Core.gs` must stay byte-identical: no `import`/`export`, no DOM, no Apps Script services inside. Edit core.js, then `cp core/core.js apps-script/Core.gs` (a test fails if they differ).
+- Strategy thresholds live in `SRCore.PARAMS`; they appear in the Config sheet automatically. Each strategy has a scenario in `tools/gas-sim/scenarios.mjs` and a test that it fires there (and its mirror fires as a short, for intraday).
 - Every interface string goes through `js/i18n.js` (English only; Malayalam was dropped at the owner's request).
 - Sample data lives only in `js/demo.js`, and any screen showing it must show the design-preview banner.
 - Colors, type and spacing come from the tokens at the top of `assets/css/app.css`; add a token rather than a one-off value.
