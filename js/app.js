@@ -1,6 +1,6 @@
 // app.js — shell, router and boot.
 import { h, icon } from './util.js';
-import { t, getLang } from './i18n.js';
+import { t } from './i18n.js';
 import { ICONS } from './icons.js';
 import { applyLook, getSettings, saveSettings, effectiveTheme } from './state.js';
 import { closeSheet, sheetIsOpen } from './ui.js';
@@ -28,15 +28,13 @@ const TABS = ['home', 'alerts', 'scan', 'results', 'more'];
 let appbar, main, tabbar;
 
 function buildShell() {
-  const langBtn = h('button', { type: 'button', class: 'lang-btn', id: 'lang-btn' });
   const themeBtn = h('button', { type: 'button', class: 'icon-btn', id: 'theme-btn' });
-  langBtn.addEventListener('click', () => { saveSettings({ lang: getLang() === 'ml' ? 'en' : 'ml' }); route(); });
   themeBtn.addEventListener('click', () => { saveSettings({ theme: effectiveTheme() === 'dark' ? 'light' : 'dark' }); paintChrome(); });
 
   appbar = h('header', { class: 'appbar' },
     h('div', { class: 'appbar-inner' },
       h('a', { class: 'brand', href: '#/home', 'aria-label': t('app.name') }, icon(ICONS.mark), h('span', { class: 'brand-name' }, t('app.name'))),
-      langBtn, themeBtn));
+      themeBtn));
   main = h('main', { id: 'main', tabindex: '-1', class: 'page' });
   tabbar = h('nav', { class: 'tabbar', 'aria-label': 'Main' }, h('div', { class: 'tabbar-inner' }));
   const skip = h('a', { class: 'skip', href: '#main', id: 'skip' });
@@ -48,14 +46,9 @@ function buildShell() {
   addEventListener('scroll', () => appbar.classList.toggle('scrolled', scrollY > 4), { passive: true });
 }
 
-/** Re-label shell controls for the current language and theme. */
+/** Refresh shell controls for the current theme and tab. */
 function paintChrome(activeTab) {
   document.getElementById('skip').textContent = t('a11y.skip');
-  const langBtn = document.getElementById('lang-btn');
-  // Each language is named in its own script, so the button is readable to the person who needs it.
-  langBtn.textContent = getLang() === 'ml' ? 'English' : 'മലയാളം';
-  langBtn.setAttribute('lang', getLang() === 'ml' ? 'en' : 'ml');
-  langBtn.setAttribute('aria-label', getLang() === 'ml' ? t('a11y.lang') : 'മലയാളത്തിലേക്ക് മാറുക');
   const themeBtn = document.getElementById('theme-btn');
   const dark = effectiveTheme() === 'dark';
   themeBtn.replaceChildren(icon(dark ? ICONS.sun : ICONS.moon));

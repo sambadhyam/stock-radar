@@ -1,11 +1,9 @@
-// i18n.js — English and Malayalam interface text.
-// Trading terms that Malayalam speakers commonly use in English (Nifty, VIX, stop-loss, swing) stay transliterated.
+// i18n.js — interface text. Every string shown in the app lives here, so wording stays consistent.
 
 const en = {
   'app.name': 'Stock Radar',
   'nav.home': 'Home', 'nav.alerts': 'Alerts', 'nav.scan': 'Scan', 'nav.results': 'Results', 'nav.more': 'More',
   'a11y.skip': 'Skip to content',
-  'a11y.lang': 'Switch to Malayalam',
   'a11y.themeDark': 'Use dark theme',
   'a11y.themeLight': 'Use light theme',
   'a11y.close': 'Close',
@@ -113,7 +111,7 @@ const en = {
   'more.backtest': 'Backtest lab', 'more.backtestSub': 'Test strategies on past data',
   'more.settings': 'Settings', 'more.settingsSub': 'Capital, risk, watchlist, alerts',
   'more.about': 'About and disclaimer', 'more.aboutSub': 'What this app does and does not do',
-  'more.version': 'Version {v}. Phase 0 design preview.',
+  'more.version': 'Version {v}. Design preview; the engine is being built in the background.',
 
   'portfolio.title': 'Portfolio',
   'portfolio.emptyTitle': 'Bring in your Zerodha holdings',
@@ -140,12 +138,11 @@ const en = {
   'settings.paperAlerts': 'Send paper signals too', 'settings.paperAlertsSub': 'Turn off to get only live-ready alerts',
   'settings.testTg': 'Send test message',
   'settings.strategies': 'Strategies', 'settings.strategiesSub': 'Turn a strategy off to stop its alerts and paper trades.',
-  'settings.look': 'Appearance and language',
+  'settings.look': 'Appearance',
   'settings.theme': 'Theme', 'theme.system': 'Match phone', 'theme.light': 'Light', 'theme.dark': 'Dark',
-  'settings.lang': 'Language',
   'settings.connection': 'Backend connection',
   'settings.url': 'Backend URL', 'settings.token': 'Access token',
-  'settings.connHint': 'You will paste these after setting up Apps Script in Phase 1.',
+  'settings.connHint': 'You will paste these in Phase 4, once the engine is running.',
   'settings.save': 'Save settings', 'settings.saved': 'Settings saved on this phone',
   'settings.invalid': 'Check the highlighted values.',
 
@@ -156,7 +153,7 @@ const en = {
   'about.data': 'Data sources',
   'about.dataBody': 'Angel One SmartAPI for live and historical prices, with Google Finance and Yahoo Finance as fallbacks. Every number carries its source and time.',
   'about.credits': 'Credits',
-  'about.creditsBody': 'Typeface: Anek by Ek Type, under the SIL Open Font License.',
+  'about.creditsBody': 'Typeface: Anek Latin by Ek Type, under the SIL Open Font License.',
 
   'alert.changed': 'What changed',
   'alert.capped': 'Your {max}% limit per stock sets this size. The risk rule alone would allow {n} shares.',
@@ -175,192 +172,10 @@ const en = {
   'fund.note': 'A dash means the value is missing. The score uses only what is present and shows how complete the data is.',
 };
 
-const ml = {
-  'nav.home': 'ഹോം', 'nav.alerts': 'അലേർട്ടുകൾ', 'nav.scan': 'സ്കാൻ', 'nav.results': 'ഫലങ്ങൾ', 'nav.more': 'കൂടുതൽ',
-  'a11y.skip': 'ഉള്ളടക്കത്തിലേക്ക് പോകുക',
-  'a11y.lang': 'ഇംഗ്ലീഷിലേക്ക് മാറുക',
-  'a11y.themeDark': 'ഡാർക്ക് തീം ഉപയോഗിക്കുക',
-  'a11y.themeLight': 'ലൈറ്റ് തീം ഉപയോഗിക്കുക',
-  'a11y.close': 'അടയ്ക്കുക',
 
-  'preview.banner': 'ഡിസൈൻ പ്രിവ്യൂ. ഈ സ്ക്രീനുകളിലെ എല്ലാ സംഖ്യകളും സാമ്പിളാണ്, യഥാർത്ഥ വിപണി ഡാറ്റയല്ല.',
-  'common.sample': 'സാമ്പിൾ',
-  'common.seeAll': 'എല്ലാം കാണുക',
-  'common.back': 'തിരികെ',
-  'common.comingPhase': 'ഫേസ് {n}-ൽ വരും',
-  'common.all': 'എല്ലാം',
-
-  'market.open': 'വിപണി തുറന്നിരിക്കുന്നു',
-  'market.pre': 'പ്രീ-ഓപ്പൺ സെഷൻ',
-  'market.closed': 'വിപണി അടച്ചു',
-  'market.weekend': 'വാരാന്ത്യം, വിപണി അടച്ചിരിക്കുന്നു',
-  'market.holiday': 'NSE അവധി',
-
-  'regime.bull': 'ശാന്തമായ ചാഞ്ചാട്ടത്തോടെ മുന്നേറ്റം',
-  'regime.neutral': 'ദിശയില്ലാത്ത വിപണി, സമ്മിശ്ര സൂചനകൾ',
-  'regime.bear': 'ഇറക്കം, പുതിയ വാങ്ങൽ സിഗ്നലുകൾ നിർത്തിവെച്ചു',
-  'regime.volatile': 'ഉയർന്ന ചാഞ്ചാട്ടം, സിഗ്നലുകൾ കർശനമായി ഫിൽട്ടർ ചെയ്യുന്നു',
-
-  'home.breadth': '50 ദിവസ ശരാശരിക്ക് മുകളിൽ',
-  'home.breadthValue': '{pct}% ഓഹരികൾ',
-  'home.signals': 'ഇന്നത്തെ സിഗ്നലുകൾ',
-  'home.paper': 'പേപ്പർ അക്കൗണ്ട്',
-  'home.sinceStart': 'തുടക്കം മുതൽ',
-  'home.today': 'ഇന്ന്',
-  'home.openTrades': '{n} ട്രേഡുകൾ തുറന്നിരിക്കുന്നു',
-  'home.track': 'ട്രാക്ക് റെക്കോർഡ്',
-  'home.trackNote': 'ഓരോ കുത്തും പൂർത്തിയായ ഒരു പേപ്പർ ട്രേഡാണ്. യഥാർത്ഥ പണത്തിന് വിശ്വസിക്കാൻ ഒരു സ്ട്രാറ്റജിക്ക് 30 ട്രേഡുകൾ വേണം.',
-  'home.engine': 'എഞ്ചിൻ',
-  'home.engineSource': '{source}-ൽ നിന്ന് ലൈവ് ഡാറ്റ',
-  'home.lastCheck': 'അവസാന പരിശോധന {time}',
-  'home.fallbacks': 'ബാക്കപ്പ്: {list}',
-
-  'legend.win': 'ലക്ഷ്യം നേടി', 'legend.loss': 'സ്റ്റോപ്പ് ആയി', 'legend.flat': 'കാലാവധി തീർന്നു', 'legend.pending': 'വരാനുള്ളവ',
-
-  'hz.intraday': 'ഇൻട്രാഡേ', 'hz.swing': 'സ്വിങ്', 'hz.medium': 'ഇടക്കാലം', 'hz.long': 'ദീർഘകാലം',
-  'hzw.intraday': 'ഇന്ന്', 'hzw.swing': '2–10 ദിവസം', 'hzw.medium': '1–6 മാസം', 'hzw.long': '12+ മാസം',
-  'hzs.intraday': 'ഇൻട്രാഡേ', 'hzs.swing': 'സ്വിങ്', 'hzs.medium': 'ഇടക്കാലം', 'hzs.long': 'ദീർഘകാലം',
-
-  'status.paper': 'പേപ്പർ', 'status.live': 'ലൈവ്-റെഡി', 'status.rejected': 'നിരസിച്ചു',
-  'status.paperNote': 'പേപ്പർ സിഗ്നൽ. ഇപ്പോൾ യഥാർത്ഥ പണത്തിനല്ല.',
-  'status.liveNote': 'ലൈവ്-റെഡി: {n} പേപ്പർ ട്രേഡുകളിൽ {win}% വിജയം.',
-
-  'dir.buy': 'വാങ്ങുക', 'dir.exit': 'വിൽക്കുക', 'dir.short': 'ഷോർട്ട്',
-
-  'alert.entry': 'എൻട്രി', 'alert.entryZone': 'എൻട്രി പരിധി', 'alert.stop': 'സ്റ്റോപ്പ്-ലോസ്', 'alert.target': 'ലക്ഷ്യം',
-  'alert.target1': 'ലക്ഷ്യം 1', 'alert.target2': 'ലക്ഷ്യം 2', 'alert.rr': 'റിവാർഡ് : റിസ്ക്',
-  'alert.valid': 'സാധുത', 'alert.confidence': 'വിശ്വാസ്യത', 'alert.why': 'ഈ സിഗ്നൽ എന്തുകൊണ്ട്',
-  'alert.plan': 'ട്രേഡ് പ്ലാൻ', 'alert.size': 'പൊസിഷൻ വലുപ്പം', 'alert.qty': 'എണ്ണം',
-  'alert.capitalUsed': 'ഉപയോഗിക്കുന്ന മൂലധനം', 'alert.riskShare': 'ഓഹരി ഒന്നിന് റിസ്ക്', 'alert.maxLoss': 'സ്റ്റോപ്പ് ആയാൽ നഷ്ടം',
-  'alert.sizeNote': 'ക്രമീകരണങ്ങളിലെ {cap} യഥാർത്ഥ മൂലധനവും ട്രേഡ് ഒന്നിന് {risk}% റിസ്കും ഉപയോഗിക്കുന്നു. ഒരു ഓഹരിയിൽ പരമാവധി {max}%.',
-  'alert.copy': 'ഓർഡർ വിവരങ്ങൾ പകർത്തുക', 'alert.copied': 'ഓർഡർ വിവരങ്ങൾ പകർത്തി', 'alert.copyFail': 'പകർത്താനായില്ല. ലെവലുകൾ അമർത്തിപ്പിടിച്ച് പകർത്തുക.',
-  'alert.kite': 'Kite തുറക്കുക',
-  'alert.record': 'സ്ട്രാറ്റജി ട്രാക്ക് റെക്കോർഡ്',
-  'alert.exitNote': 'നിങ്ങളുടെ ഹോൾഡിങ്സിലെ ഓഹരിക്കുള്ള എക്സിറ്റ് അലേർട്ട്.',
-  'alert.lastPrice': 'അവസാന വില',
-
-  'alerts.title': 'അലേർട്ടുകൾ',
-  'alerts.sub': 'എഞ്ചിൻ അയച്ച എല്ലാ സിഗ്നലുകളും, പ്ലാനും സ്ട്രാറ്റജിയുടെ റെക്കോർഡും സഹിതം.',
-  'alerts.empty': 'ഈ ഫിൽട്ടറുകൾക്ക് അലേർട്ടുകൾ ഇല്ല.',
-  'alerts.clear': 'എല്ലാ അലേർട്ടുകളും കാണിക്കുക',
-
-  'scan.title': 'സ്കാൻ',
-  'scan.long': 'ദീർഘകാലം', 'scan.medium': 'ഇടക്കാലം', 'scan.swing': 'സ്വിങ്',
-  'scan.longNote': 'Nifty 500 ഓഹരികളും പ്രധാന ETF-കളും ഗുണനിലവാരവും മൂല്യവും അനുസരിച്ച്. ഫണ്ടമെന്റൽസ് നിങ്ങൾ ഇമ്പോർട്ട് ചെയ്യുന്ന CSV-യിൽ നിന്ന്.',
-  'scan.mediumNote': 'ഉറച്ച മുന്നേറ്റത്തിലുള്ള Nifty 200 ഓഹരികൾ, Nifty 50-നെതിരായ കരുത്ത് അനുസരിച്ച്.',
-  'scan.swingNote': 'അടുത്ത ഏതാനും സെഷനുകളിൽ ട്രിഗർ ആകാവുന്ന Nifty 200 സെറ്റപ്പുകൾ.',
-  'scan.score': 'സ്കോർ',
-  'scan.complete': 'ഡാറ്റ {pct}% പൂർണ്ണം',
-
-  'stock.chart': 'ദിവസ ചാർട്ട്',
-  'stock.range': '52 ആഴ്ചയിലെ പരിധി',
-  'stock.dma50': '50 ദിവസ ശരാശരി', 'stock.dma200': '200 ദിവസ ശരാശരി',
-  'stock.fund': 'ഫണ്ടമെന്റൽസ്', 'stock.pastAlerts': 'ഈ ഓഹരിയിലെ മുൻ അലേർട്ടുകൾ', 'stock.noAlerts': 'ഈ ഓഹരിയിൽ ഇതുവരെ അലേർട്ടുകൾ ഇല്ല.',
-  'stock.news': 'വാർത്തകൾ',
-  'stock.newsNote': 'ബാക്കെൻഡ് കണക്റ്റ് ചെയ്താൽ Google News തലക്കെട്ടുകൾ ഇവിടെ കാണാം.',
-
-  'results.title': 'ഫലങ്ങൾ',
-  'results.strategies': 'സ്ട്രാറ്റജികൾ', 'results.paper': 'പേപ്പർ ട്രേഡുകൾ', 'results.reports': 'റിപ്പോർട്ടുകൾ',
-  'results.summary': '{live} ലൈവ്-റെഡി, {paper} പേപ്പറിൽ, {rej} നിരസിച്ചു',
-  'results.trades': '30-ൽ {n} ട്രേഡുകൾ',
-  'results.tradesDone': '{n} ട്രേഡുകൾ, അവസാന 30 കാണിക്കുന്നു',
-  'results.win': 'വിജയ നിരക്ക്', 'results.avg': 'ട്രേഡ് ഒന്നിന് ശരാശരി', 'results.pf': 'പ്രോഫിറ്റ് ഫാക്ടർ', 'results.vsNifty': 'Nifty 50-നെ അപേക്ഷിച്ച്',
-  'results.early': 'ആദ്യ കണക്കുകൾ, 30-ൽ താഴെ ട്രേഡുകൾ',
-  'results.none': 'ഇതുവരെ ട്രേഡുകൾ പൂർത്തിയായിട്ടില്ല',
-  'results.rules': 'ലൈവ്-റെഡി ആകാൻ 30 ട്രേഡുകൾ, ചാർജുകൾ കഴിഞ്ഞ് പോസിറ്റീവ് ശരാശരി, കുറഞ്ഞത് 1.3 പ്രോഫിറ്റ് ഫാക്ടർ, Nifty 50-നേക്കാൾ മികച്ച റിട്ടേൺ എന്നിവ വേണം.',
-  'results.equity': 'പേപ്പർ ഇക്വിറ്റി', 'results.open': 'തുറന്ന ട്രേഡുകൾ', 'results.closed': 'അടുത്തിടെ അടച്ചവ',
-  'results.entryAt': 'എൻട്രി {price}', 'results.now': 'ഇപ്പോൾ {price}',
-  'results.readiness': 'റെഡിനസ് റിപ്പോർട്ടുകൾ', 'results.readinessNote': 'Telegram-ലേക്ക് അയയ്ക്കുകയും ഇവിടെ സൂക്ഷിക്കുകയും ചെയ്യും. ഓരോ സ്ട്രാറ്റജിക്കും വിധി നൽകും.',
-  'results.day': '{n}-ാം ദിവസ റിപ്പോർട്ട്', 'results.due': '{date}', 'results.weekly': 'ആഴ്ചതോറുമുള്ള റിപ്പോർട്ടുകൾ',
-  'results.weeklyNote': 'എല്ലാ ശനിയാഴ്ചയും വിപണി അടച്ച ശേഷം.',
-  'results.backtest': 'ബാക്ക്ടെസ്റ്റും പേപ്പറും',
-  'results.backtestNote': 'ബാക്ക്ടെസ്റ്റ് കണക്കുകൾ 5–10 വർഷത്തെ ചരിത്രത്തിൽ നിന്ന്. രണ്ട് കോളങ്ങളും തമ്മിൽ വലിയ വ്യത്യാസമുണ്ടെങ്കിൽ അത് മുന്നറിയിപ്പാണ്.',
-  'results.colBacktest': 'ബാക്ക്ടെസ്റ്റ്', 'results.colPaper': 'പേപ്പർ',
-  'results.override': 'സ്റ്റാറ്റസ് സ്വയം മാറ്റുക',
-
-  'more.title': 'കൂടുതൽ',
-  'more.portfolio': 'പോർട്ട്ഫോളിയോ', 'more.portfolioSub': 'ഹോൾഡിങ്സ്, P&L, എക്സിറ്റ് അലേർട്ടുകൾ',
-  'more.backtest': 'ബാക്ക്ടെസ്റ്റ് ലാബ്', 'more.backtestSub': 'പഴയ ഡാറ്റയിൽ സ്ട്രാറ്റജികൾ പരീക്ഷിക്കുക',
-  'more.settings': 'ക്രമീകരണങ്ങൾ', 'more.settingsSub': 'മൂലധനം, റിസ്ക്, വാച്ച്‌ലിസ്റ്റ്, അലേർട്ടുകൾ',
-  'more.about': 'വിവരവും നിരാകരണവും', 'more.aboutSub': 'ഈ ആപ്പ് ചെയ്യുന്നതും ചെയ്യാത്തതും',
-  'more.version': 'പതിപ്പ് {v}. ഫേസ് 0 ഡിസൈൻ പ്രിവ്യൂ.',
-
-  'portfolio.title': 'പോർട്ട്ഫോളിയോ',
-  'portfolio.emptyTitle': 'നിങ്ങളുടെ Zerodha ഹോൾഡിങ്സ് കൊണ്ടുവരിക',
-  'portfolio.emptyBody': 'Zerodha Console-ൽ നിന്ന് ഹോൾഡിങ്സ് CSV ഡൗൺലോഡ് ചെയ്ത് ഇവിടെ ഇമ്പോർട്ട് ചെയ്താൽ ഓരോ ഓഹരിയുടെയും P&L, സെക്ടർ വിഭജനം, എക്സിറ്റ് അലേർട്ടുകൾ കാണാം.',
-  'portfolio.import': 'ഹോൾഡിങ്സ് CSV ഇമ്പോർട്ട് ചെയ്യുക',
-
-  'backtest.title': 'ബാക്ക്ടെസ്റ്റ് ലാബ്',
-  'backtest.emptyTitle': 'വിശ്വസിക്കും മുമ്പ് സ്ട്രാറ്റജി പരീക്ഷിക്കുക',
-  'backtest.emptyBody': 'ഒരു സ്ട്രാറ്റജിയും ഓഹരി ലിസ്റ്റും തിരഞ്ഞെടുത്താൽ 10 വർഷം വരെയുള്ള ദിവസ ചരിത്രം വീണ്ടും ഓടിച്ച് വിജയങ്ങളും നഷ്ടങ്ങളും ഇടിവുകളും കാണിക്കും.',
-
-  'settings.title': 'ക്രമീകരണങ്ങൾ',
-  'settings.sub': 'ബാക്കെൻഡ് കണക്റ്റ് ചെയ്താൽ ഈ മാറ്റങ്ങൾ അലേർട്ട് എഞ്ചിനിൽ ബാധകമാകും. ഈ പ്രിവ്യൂവിൽ അവ ഈ ഫോണിൽ മാത്രം.',
-  'settings.money': 'പണവും റിസ്കും',
-  'settings.realCap': 'യഥാർത്ഥ മൂലധനം', 'settings.realCapHint': 'അലേർട്ട് കാർഡുകളിൽ യഥാർത്ഥ ട്രേഡ് വലുപ്പം കണക്കാക്കാൻ.',
-  'settings.paperCap': 'പേപ്പർ മൂലധനം', 'settings.paperCapHint': 'എഞ്ചിൻ ട്രേഡ് ചെയ്യുന്ന സാങ്കൽപ്പിക പണം.',
-  'settings.risk': 'ട്രേഡ് ഒന്നിന് റിസ്ക്', 'settings.riskHint': 'സ്റ്റോപ്പ്-ലോസ് ആയാൽ സഹിക്കാവുന്ന നഷ്ടം. സാധാരണ 0.5–2%.',
-  'settings.maxStock': 'ഒരു ഓഹരിയിൽ പരമാവധി', 'settings.maxStockHint': 'സ്റ്റോപ്പ് വളരെ അടുത്താണെങ്കിലും പൊസിഷൻ വലുപ്പം നിയന്ത്രിക്കുന്നു.',
-  'settings.watchlist': 'വാച്ച്‌ലിസ്റ്റ്', 'settings.watchlistHint': 'ഇൻട്രാഡേ സ്കാനിൽ ചേർക്കും, പരമാവധി 10 ചിഹ്നങ്ങൾ.',
-  'settings.addSymbol': 'NSE ചിഹ്നം, ഉദാ. TATAMOTORS', 'settings.add': 'ചേർക്കുക', 'settings.remove': '{s} നീക്കുക',
-  'settings.watchFull': 'വാച്ച്‌ലിസ്റ്റ് നിറഞ്ഞു. പുതിയത് ചേർക്കാൻ ഒന്ന് നീക്കുക.', 'settings.watchDup': '{s} ഇതിനകം ലിസ്റ്റിലുണ്ട്.',
-  'settings.alerts': 'അലേർട്ടുകൾ',
-  'settings.telegram': 'Telegram അലേർട്ടുകൾ', 'settings.telegramSub': 'വാങ്ങൽ, എക്സിറ്റ്, സ്റ്റോപ്പ്-ലോസ് സന്ദേശങ്ങൾ',
-  'settings.email': 'ദിവസേന ഇമെയിൽ സംഗ്രഹം', 'settings.emailSub': 'വൈകിട്ട് 4-ന് ദിവസ സംഗ്രഹം',
-  'settings.paperAlerts': 'പേപ്പർ സിഗ്നലുകളും അയയ്ക്കുക', 'settings.paperAlertsSub': 'ഓഫ് ചെയ്താൽ ലൈവ്-റെഡി അലേർട്ടുകൾ മാത്രം',
-  'settings.testTg': 'ടെസ്റ്റ് സന്ദേശം അയയ്ക്കുക',
-  'settings.strategies': 'സ്ട്രാറ്റജികൾ', 'settings.strategiesSub': 'ഒരു സ്ട്രാറ്റജി ഓഫ് ചെയ്താൽ അതിന്റെ അലേർട്ടുകളും പേപ്പർ ട്രേഡുകളും നിൽക്കും.',
-  'settings.look': 'രൂപവും ഭാഷയും',
-  'settings.theme': 'തീം', 'theme.system': 'ഫോണിനനുസരിച്ച്', 'theme.light': 'ലൈറ്റ്', 'theme.dark': 'ഡാർക്ക്',
-  'settings.lang': 'ഭാഷ',
-  'settings.connection': 'ബാക്കെൻഡ് കണക്ഷൻ',
-  'settings.url': 'ബാക്കെൻഡ് URL', 'settings.token': 'ആക്സസ് ടോക്കൺ',
-  'settings.connHint': 'ഫേസ് 1-ൽ Apps Script സജ്ജമാക്കിയ ശേഷം ഇവ ഇവിടെ നൽകും.',
-  'settings.save': 'ക്രമീകരണങ്ങൾ സേവ് ചെയ്യുക', 'settings.saved': 'ക്രമീകരണങ്ങൾ ഈ ഫോണിൽ സേവ് ചെയ്തു',
-  'settings.invalid': 'അടയാളപ്പെടുത്തിയ മൂല്യങ്ങൾ പരിശോധിക്കുക.',
-
-  'about.title': 'വിവരവും നിരാകരണവും',
-  'about.p1': 'Stock Radar ഒരു വ്യക്തിഗത വിശകലന ഉപകരണമാണ്. ഇത് വിപണി ഡാറ്റ വായിച്ച്, നിശ്ചിത നിയമങ്ങൾ പ്രയോഗിച്ച്, അലേർട്ടുകൾ അയച്ച്, സ്വന്തം സിഗ്നലുകൾ പേപ്പർ-ട്രേഡ് ചെയ്യുന്നു. ഓരോ സ്ട്രാറ്റജിയും യഥാർത്ഥത്തിൽ എങ്ങനെ പ്രവർത്തിക്കുന്നുവെന്ന് കാണാം.',
-  'about.p2': 'ഇത് നിക്ഷേപ ഉപദേശം നൽകുന്നില്ല, ഒരിക്കലും ഓർഡറുകൾ നൽകുന്നില്ല. ഓരോ യഥാർത്ഥ ഓർഡറും നിങ്ങൾ തന്നെ തീരുമാനിച്ച് Kite-ൽ നൽകുന്നു.',
-  'about.p3': 'സിഗ്നലുകൾ തെറ്റാകാം. മുൻകാല, പേപ്പർ ഫലങ്ങൾ ഭാവി റിട്ടേൺ ഉറപ്പുനൽകുന്നില്ല. നടപടിയെടുക്കും മുമ്പ് നികുതി നിരക്കുകളും ചാർജുകളും പരിശോധിക്കുക.',
-  'about.data': 'ഡാറ്റ ഉറവിടങ്ങൾ',
-  'about.dataBody': 'ലൈവ്, ചരിത്ര വിലകൾക്ക് Angel One SmartAPI. ബാക്കപ്പായി Google Finance, Yahoo Finance. ഓരോ സംഖ്യയ്ക്കും ഉറവിടവും സമയവും ഉണ്ടാകും.',
-  'about.credits': 'ക്രെഡിറ്റുകൾ',
-  'about.creditsBody': 'ടൈപ്പ്ഫേസ്: Ek Type-ന്റെ Anek, SIL Open Font License പ്രകാരം.',
-
-  'alert.changed': 'എന്ത് മാറി',
-  'alert.capped': 'ഒരു ഓഹരിയിൽ {max}% എന്ന പരിധിയാണ് ഈ വലുപ്പം നിശ്ചയിക്കുന്നത്. റിസ്ക് നിയമം മാത്രം നോക്കിയാൽ {n} ഓഹരികൾ വാങ്ങാം.',
-  'home.winShort': '{pct}% വിജയം',
-  'home.fallbackReady': 'ബാക്കപ്പ് തയ്യാർ',
-  'home.fallbackOff': 'ബാക്കപ്പ് ഓഫ്',
-  'home.signalsOn': '{date}-ലെ സിഗ്നലുകൾ',
-  'home.lastSession': 'അവസാന സെഷൻ',
-  'results.qty': '{n} ഓഹരികൾ',
-  'results.scheduled': 'ഷെഡ്യൂൾ ചെയ്തു',
-  'results.dd': 'ഏറ്റവും വലിയ ഇടിവ്',
-  'scan.etfs': 'പ്രധാന ETF-കൾ',
-  'scan.etfsNote': 'ഇൻഡക്സ്, ഗോൾഡ് ETF-കൾക്ക് സ്കോർ ഇല്ല. ഓഹരി തിരഞ്ഞെടുപ്പുകൾക്കൊപ്പമുള്ള സ്ഥിരമായ അടിത്തറയാണ് അവ.',
-  'fund.de': 'കടം : ഇക്വിറ്റി', 'fund.sales': 'വിൽപ്പന വളർച്ച, 3 വർഷം', 'fund.profit': 'ലാഭ വളർച്ച, 3 വർഷം',
-  'fund.pe': 'ഇപ്പോഴത്തെ PE, 5 വർഷ മീഡിയൻ', 'fund.pledge': 'പ്രൊമോട്ടർ പ്ലെഡ്ജ്',
-  'fund.note': 'ഡാഷ് എന്നാൽ മൂല്യം ലഭ്യമല്ല. ലഭ്യമായവ മാത്രം ഉപയോഗിച്ചാണ് സ്കോർ, ഡാറ്റ എത്ര പൂർണ്ണമാണെന്നും കാണിക്കും.',
-};
-
-const DICTS = { en, ml };
-let current = 'en';
-
-export function setLang(lang) { current = DICTS[lang] ? lang : 'en'; }
-export function getLang() { return current; }
-
-/** Translate a key, filling {placeholders}. Falls back to English, then to the key itself. */
+/** Look up a string, filling {placeholders}. Falls back to the key itself. */
 export function t(key, vars) {
-  let str = DICTS[current][key] ?? en[key] ?? key;
+  let str = en[key] ?? key;
   if (vars) for (const [k, v] of Object.entries(vars)) str = str.split('{' + k + '}').join(String(v));
   return str;
-}
-
-/** Pick a localized value from an object like { en: '...', ml: '...' }. */
-export function pick(obj) {
-  if (obj == null) return '';
-  if (typeof obj === 'string') return obj;
-  return obj[current] ?? obj.en ?? '';
 }

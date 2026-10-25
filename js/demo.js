@@ -143,32 +143,32 @@ function vwap(candles) {
 
 // ---------- Strategies ----------
 const STRATEGIES = [
-  { id: 'ema-pullback', name: { en: 'Pullback to 20 EMA', ml: '20 EMA-ലേക്കുള്ള പുൾബാക്ക്' }, horizon: 'swing', status: 'live', trades: 41,
+  { id: 'ema-pullback', name: 'Pullback to 20 EMA', horizon: 'swing', status: 'live', trades: 41,
     outcomes: 'WWLWXWWLWWLWWXWLWWLWWWLXWLWWLW', win: 61, avg: 0.84, pf: 1.62, vsNifty: 4.1,
     backtest: { win: 58, avg: 0.71, pf: 1.48, dd: -8.2 }, paperDd: -4.1 },
-  { id: 'base-breakout', name: { en: 'Base breakout', ml: 'ബേസ് ബ്രേക്ക്ഔട്ട്' }, horizon: 'swing', status: 'paper', trades: 17,
+  { id: 'base-breakout', name: 'Base breakout', horizon: 'swing', status: 'paper', trades: 17,
     outcomes: 'WLWWLXWLLWWXWLWWL', avg: 0.51, pf: 1.34, vsNifty: 1.2, backtest: { win: 49, avg: 0.62, pf: 1.41, dd: -11.5 }, paperDd: -5.6 },
-  { id: 'rsi2', name: { en: 'RSI(2) dip in uptrend', ml: 'മുന്നേറ്റത്തിലെ RSI(2) ഇടിവ്' }, horizon: 'swing', status: 'paper', trades: 12,
+  { id: 'rsi2', name: 'RSI(2) dip in uptrend', horizon: 'swing', status: 'paper', trades: 12,
     outcomes: 'WWLWWXWLWWLW', avg: 0.66, pf: 1.71, vsNifty: 2.4, backtest: { win: 66, avg: 0.48, pf: 1.52, dd: -7.4 }, paperDd: -2.2 },
-  { id: 'macd', name: { en: 'MACD trend cross', ml: 'MACD ട്രെൻഡ് ക്രോസ്' }, horizon: 'swing', status: 'rejected', trades: 31,
+  { id: 'macd', name: 'MACD trend cross', horizon: 'swing', status: 'rejected', trades: 31,
     outcomes: 'LWLLXLWLLWLXLLWLLWXLLWLLWLXLWL', win: 29, avg: -0.38, pf: 0.81, vsNifty: -3.6, backtest: { win: 44, avg: 0.12, pf: 1.06, dd: -14.8 }, paperDd: -9.3 },
-  { id: 'orb', name: { en: 'Opening-range breakout', ml: 'ഓപ്പണിങ്-റേഞ്ച് ബ്രേക്ക്ഔട്ട്' }, horizon: 'intraday', status: 'paper', trades: 14,
+  { id: 'orb', name: 'Opening-range breakout', horizon: 'intraday', status: 'paper', trades: 14,
     outcomes: 'WLLWXWWLWLWXLW', avg: 0.12, pf: 1.12, vsNifty: 0.3, backtest: { win: 47, avg: 0.09, pf: 1.08, dd: -6.1 }, paperDd: -2.9 },
-  { id: 'vwap', name: { en: 'VWAP reclaim', ml: 'VWAP റീക്ലെയിം' }, horizon: 'intraday', status: 'paper', trades: 9,
+  { id: 'vwap', name: 'VWAP reclaim', horizon: 'intraday', status: 'paper', trades: 9,
     outcomes: 'LWWLXLWLW', avg: 0.04, pf: 1.03, vsNifty: -0.1, backtest: { win: 45, avg: 0.05, pf: 1.04, dd: -7.0 }, paperDd: -1.8 },
-  { id: 'ema-cross', name: { en: 'EMA 9/21 cross', ml: 'EMA 9/21 ക്രോസ്' }, horizon: 'intraday', status: 'paper', trades: 22,
+  { id: 'ema-cross', name: 'EMA 9/21 cross', horizon: 'intraday', status: 'paper', trades: 22,
     outcomes: 'WLLWLWXLWWLLWXLWWLLWLW', avg: -0.02, pf: 0.98, vsNifty: -0.4, backtest: { win: 43, avg: 0.02, pf: 1.01, dd: -9.9 }, paperDd: -3.7 },
-  { id: 'gap', name: { en: 'Gap and go', ml: 'ഗ്യാപ് ആൻഡ് ഗോ' }, horizon: 'intraday', status: 'paper', trades: 5,
+  { id: 'gap', name: 'Gap and go', horizon: 'intraday', status: 'paper', trades: 5,
     outcomes: 'WXWLW', avg: 0.31, pf: 1.55, vsNifty: 0.6, backtest: { win: 51, avg: 0.14, pf: 1.17, dd: -5.2 }, paperDd: -0.9 },
-  { id: 'trend-template', name: { en: 'Trend template', ml: 'ട്രെൻഡ് ടെംപ്ലേറ്റ്' }, horizon: 'medium', status: 'paper', trades: 6,
+  { id: 'trend-template', name: 'Trend template', horizon: 'medium', status: 'paper', trades: 6,
     outcomes: 'WWXLWW', avg: 3.9, pf: 2.1, vsNifty: 2.8, backtest: { win: 52, avg: 4.4, pf: 1.86, dd: -13.1 }, paperDd: -3.4 },
-  { id: 'rs-leaders', name: { en: 'Relative strength leaders', ml: 'റിലേറ്റീവ് സ്ട്രെങ്ത് ലീഡർമാർ' }, horizon: 'medium', status: 'paper', trades: 4,
+  { id: 'rs-leaders', name: 'Relative strength leaders', horizon: 'medium', status: 'paper', trades: 4,
     outcomes: 'WLWX', avg: 1.7, pf: 1.4, vsNifty: 0.9, backtest: { win: 50, avg: 3.1, pf: 1.62, dd: -15.6 }, paperDd: -4.0 },
-  { id: 'near-high', name: { en: 'Near 52-week high', ml: '52 ആഴ്ച ഉയരത്തിനടുത്ത്' }, horizon: 'medium', status: 'paper', trades: 3,
+  { id: 'near-high', name: 'Near 52-week high', horizon: 'medium', status: 'paper', trades: 3,
     outcomes: 'WWL', avg: 2.2, pf: 1.9, vsNifty: 1.1, backtest: { win: 48, avg: 2.6, pf: 1.44, dd: -16.2 }, paperDd: -2.5 },
-  { id: 'quality-value', name: { en: 'Quality-value score', ml: 'ക്വാളിറ്റി-വാല്യു സ്കോർ' }, horizon: 'long', status: 'paper', trades: 0,
+  { id: 'quality-value', name: 'Quality-value score', horizon: 'long', status: 'paper', trades: 0,
     outcomes: '', avg: null, pf: null, vsNifty: null, backtest: { win: 57, avg: 14.2, pf: 2.3, dd: -24.0 }, paperDd: null },
-  { id: 'holding-guard', name: { en: 'Holding guard', ml: 'ഹോൾഡിങ് ഗാർഡ്' }, horizon: 'long', status: 'paper', trades: 2,
+  { id: 'holding-guard', name: 'Holding guard', horizon: 'long', status: 'paper', trades: 2,
     outcomes: 'WX', avg: 1.1, pf: null, vsNifty: null, backtest: { win: 54, avg: 2.9, pf: 1.5, dd: -9.0 }, paperDd: null },
 ];
 for (const st of STRATEGIES) {
@@ -187,9 +187,9 @@ const ALERTS = [
     entryLo: 1407, entryHi: 1409, stop: 1401.5, targets: [1420], confidence: 58, validTill: at(S, '15:15'),
     chart: { candles: charts.ICICIBANK, mode: 'intraday', overlays: [{ key: 'vwap', values: vwap(charts.ICICIBANK) }] },
     why: [
-      { en: 'Broke above the first 15-minute range high of ₹1,406.50', ml: 'ആദ്യ 15 മിനിറ്റ് പരിധിയുടെ ഉയർന്ന നിലയായ ₹1,406.50 മറികടന്നു' },
-      { en: 'Breakout candle volume is 2.1× the session average', ml: 'ബ്രേക്ക്ഔട്ട് കാൻഡിലിലെ വോളിയം സെഷൻ ശരാശരിയുടെ 2.1 മടങ്ങ്' },
-      { en: 'Price is above VWAP and Nifty is positive for the day', ml: 'വില VWAP-ന് മുകളിൽ, Nifty ഇന്ന് പോസിറ്റീവ്' },
+      'Broke above the first 15-minute range high of ₹1,406.50',
+      'Breakout candle volume is 2.1× the session average',
+      'Price is above VWAP and Nifty is positive for the day',
     ],
   },
   {
@@ -197,9 +197,9 @@ const ALERTS = [
     entryLo: 1452, entryHi: 1460, stop: 1428, targets: [1520, 1560], confidence: 66, validTill: at(nextSessions(S, 2), '15:30'),
     chart: { candles: charts.RELIANCE, mode: 'day', overlays: [{ key: 'ema20', values: overlayEma(charts.RELIANCE, 20, 60) }] },
     why: [
-      { en: 'Closed above its 12-week range high of ₹1,446', ml: '12 ആഴ്ചത്തെ പരിധിയുടെ ഉയർന്ന നിലയായ ₹1,446-ന് മുകളിൽ ക്ലോസ് ചെയ്തു' },
-      { en: 'Volume was 1.8× its 20-day average', ml: 'വോളിയം 20 ദിവസ ശരാശരിയുടെ 1.8 മടങ്ങ്' },
-      { en: 'Nifty is above its 50 and 200-day averages', ml: 'Nifty അതിന്റെ 50, 200 ദിവസ ശരാശരികൾക്ക് മുകളിൽ' },
+      'Closed above its 12-week range high of ₹1,446',
+      'Volume was 1.8× its 20-day average',
+      'Nifty is above its 50 and 200-day averages',
     ],
   },
   {
@@ -207,9 +207,9 @@ const ALERTS = [
     entryLo: 3550, entryHi: 3565, stop: 3492, targets: [3690, 3760], confidence: 74, validTill: at(nextSessions(S, 2), '15:30'),
     chart: { candles: charts.TITAN, mode: 'day', overlays: [{ key: 'ema20', values: overlayEma(charts.TITAN, 20, 60) }] },
     why: [
-      { en: 'Pulled back to its rising 20-day EMA after a 9% run', ml: '9% ഉയർന്ന ശേഷം ഉയരുന്ന 20 ദിവസ EMA-ലേക്ക് തിരിച്ചിറങ്ങി' },
-      { en: 'Closed as a bullish reversal candle at the EMA', ml: 'EMA-യിൽ ബുള്ളിഷ് റിവേഴ്സൽ കാൻഡിലായി ക്ലോസ് ചെയ്തു' },
-      { en: 'This strategy has a 61% win rate over 41 paper trades', ml: 'ഈ സ്ട്രാറ്റജിക്ക് 41 പേപ്പർ ട്രേഡുകളിൽ 61% വിജയം' },
+      'Pulled back to its rising 20-day EMA after a 9% run',
+      'Closed as a bullish reversal candle at the EMA',
+      'This strategy has a 61% win rate over 41 paper trades',
     ],
   },
   {
@@ -217,20 +217,20 @@ const ALERTS = [
     entryLo: 1690, entryHi: 1708, stop: 1612, targets: [1880], confidence: 71, validTill: at(nextSessions(S, 3), '15:30'),
     chart: { candles: tail(charts.SUNPHARMA, 120), mode: 'day', overlays: [{ key: 'sma50', values: overlaySma(charts.SUNPHARMA, 50, 120) }] },
     why: [
-      { en: 'Price is above its 50, 150 and 200-day averages, all rising', ml: 'വില 50, 150, 200 ദിവസ ശരാശരികൾക്ക് മുകളിൽ, എല്ലാം ഉയരുന്നു' },
-      { en: 'Relative strength is in the top 8% of Nifty 200', ml: 'റിലേറ്റീവ് സ്ട്രെങ്ത് Nifty 200-ന്റെ മുൻനിര 8%-ൽ' },
-      { en: 'Trading 3% below its 52-week high', ml: '52 ആഴ്ചത്തെ ഉയരത്തിൽ നിന്ന് 3% താഴെ' },
+      'Price is above its 50, 150 and 200-day averages, all rising',
+      'Relative strength is in the top 8% of Nifty 200',
+      'Trading 3% below its 52-week high',
     ],
   },
   {
     id: 'a5', symbol: 'INFY', horizon: 'long', strategy: 'holding-guard', dir: 'exit', time: at(S, '16:05'),
     lastPrice: 1468.2, dma200: tail(sma(charts.INFY.map((c) => c.c), 200), 1)[0], confidence: 63,
-    headline: { en: 'Closed below its 200-day average', ml: '200 ദിവസ ശരാശരിക്ക് താഴെ ക്ലോസ് ചെയ്തു' },
+    headline: 'Closed below its 200-day average',
     chart: { candles: tail(charts.INFY, 120), mode: 'day', overlays: [{ key: 'sma200', values: overlaySma(charts.INFY, 200, 120) }] },
     why: [
-      { en: 'Closed below its 200-day average for the second session', ml: 'തുടർച്ചയായ രണ്ടാം സെഷനിലും 200 ദിവസ ശരാശരിക്ക് താഴെ ക്ലോസ്' },
-      { en: 'Down 9.6% from its 3-month high', ml: '3 മാസത്തെ ഉയരത്തിൽ നിന്ന് 9.6% താഴെ' },
-      { en: 'You hold this stock in your imported portfolio', ml: 'ഇമ്പോർട്ട് ചെയ്ത പോർട്ട്ഫോളിയോയിൽ ഈ ഓഹരി നിങ്ങൾക്കുണ്ട്' },
+      'Closed below its 200-day average for the second session',
+      'Down 9.6% from its 3-month high',
+      'You hold this stock in your imported portfolio',
     ],
   },
   {
@@ -239,7 +239,7 @@ const ALERTS = [
     outcome: { state: 'target', pct: 3.1 },
     chart: { candles: charts.HDFCBANK, mode: 'day', overlays: [{ key: 'ema20', values: overlayEma(charts.HDFCBANK, 20, 60) }] },
     why: [
-      { en: 'RSI(2) fell below 10 while price stayed above its 200-day average', ml: 'വില 200 ദിവസ ശരാശരിക്ക് മുകളിൽ നിൽക്കെ RSI(2) 10-ന് താഴെയായി' },
+      'RSI(2) fell below 10 while price stayed above its 200-day average',
     ],
   },
   {
@@ -248,7 +248,7 @@ const ALERTS = [
     outcome: { state: 'stop', pct: -1.4 },
     chart: { candles: charts.LT, mode: 'day', overlays: [] },
     why: [
-      { en: 'MACD crossed above its signal line with price above the 50-day average', ml: 'വില 50 ദിവസ ശരാശരിക്ക് മുകളിൽ നിൽക്കെ MACD സിഗ്നൽ ലൈൻ മറികടന്നു' },
+      'MACD crossed above its signal line with price above the 50-day average',
     ],
   },
 ];
@@ -297,12 +297,12 @@ const PAPER = {
 // ---------- Screeners ----------
 const SCAN = {
   long: [
-    { symbol: 'HDFCBANK', sector: 'Banks', score: 82, complete: 100, line: { en: 'ROE 17%, profit growth 15% a year, PE below its 5-year median', ml: 'ROE 17%, വർഷം 15% ലാഭ വളർച്ച, PE 5 വർഷ മീഡിയനിൽ താഴെ' } },
-    { symbol: 'ITC', sector: 'FMCG', score: 79, complete: 100, line: { en: 'Debt-free, ROCE 37%, steady dividends', ml: 'കടമില്ല, ROCE 37%, സ്ഥിരമായ ഡിവിഡന്റ്' } },
-    { symbol: 'INFY', sector: 'IT', score: 76, complete: 92, line: { en: 'ROE 29%, strong free cash flow, PE near its median', ml: 'ROE 29%, ശക്തമായ ഫ്രീ ക്യാഷ് ഫ്ലോ, PE മീഡിയന് അടുത്ത്' } },
-    { symbol: 'SUNPHARMA', sector: 'Pharma', score: 74, complete: 100, line: { en: 'Sales growth 11% a year, low debt, no promoter pledge', ml: 'വർഷം 11% വിൽപ്പന വളർച്ച, കുറഞ്ഞ കടം, പ്രൊമോട്ടർ പ്ലെഡ്ജ് ഇല്ല' } },
-    { symbol: 'ASIANPAINT', sector: 'Paints', score: 71, complete: 83, line: { en: 'ROCE 31%, but PE above its 5-year median', ml: 'ROCE 31%, പക്ഷേ PE 5 വർഷ മീഡിയന് മുകളിൽ' } },
-    { symbol: 'MARUTI', sector: 'Auto', score: 68, complete: 92, line: { en: 'Net cash, profit growth 18% a year', ml: 'നെറ്റ് ക്യാഷ്, വർഷം 18% ലാഭ വളർച്ച' } },
+    { symbol: 'HDFCBANK', sector: 'Banks', score: 82, complete: 100, line: 'ROE 17%, profit growth 15% a year, PE below its 5-year median' },
+    { symbol: 'ITC', sector: 'FMCG', score: 79, complete: 100, line: 'Debt-free, ROCE 37%, steady dividends' },
+    { symbol: 'INFY', sector: 'IT', score: 76, complete: 92, line: 'ROE 29%, strong free cash flow, PE near its median' },
+    { symbol: 'SUNPHARMA', sector: 'Pharma', score: 74, complete: 100, line: 'Sales growth 11% a year, low debt, no promoter pledge' },
+    { symbol: 'ASIANPAINT', sector: 'Paints', score: 71, complete: 83, line: 'ROCE 31%, but PE above its 5-year median' },
+    { symbol: 'MARUTI', sector: 'Auto', score: 68, complete: 92, line: 'Net cash, profit growth 18% a year' },
   ],
   etfs: [
     { symbol: 'NIFTYBEES', sector: 'Nifty 50 ETF' },
@@ -310,15 +310,15 @@ const SCAN = {
     { symbol: 'GOLDBEES', sector: 'Gold ETF' },
   ],
   medium: [
-    { symbol: 'SUNPHARMA', sector: 'Pharma', score: 92, line: { en: 'Relative strength in the top 8%, 3% below its 52-week high', ml: 'റിലേറ്റീവ് സ്ട്രെങ്ത് മുൻനിര 8%-ൽ, 52 ആഴ്ച ഉയരത്തിൽ നിന്ന് 3% താഴെ' } },
-    { symbol: 'BHARTIARTL', sector: 'Telecom', score: 89, line: { en: 'All averages rising, new high last week', ml: 'എല്ലാ ശരാശരികളും ഉയരുന്നു, കഴിഞ്ഞ ആഴ്ച പുതിയ ഉയരം' } },
-    { symbol: 'TITAN', sector: 'Consumer', score: 84, line: { en: 'Above all averages, pulling back on light volume', ml: 'എല്ലാ ശരാശരികൾക്കും മുകളിൽ, കുറഞ്ഞ വോളിയത്തിൽ പുൾബാക്ക്' } },
-    { symbol: 'BAJFINANCE', sector: 'Finance', score: 81, line: { en: 'Top 15% strength, 6% below its 52-week high', ml: 'മുൻനിര 15% കരുത്ത്, 52 ആഴ്ച ഉയരത്തിൽ നിന്ന് 6% താഴെ' } },
+    { symbol: 'SUNPHARMA', sector: 'Pharma', score: 92, line: 'Relative strength in the top 8%, 3% below its 52-week high' },
+    { symbol: 'BHARTIARTL', sector: 'Telecom', score: 89, line: 'All averages rising, new high last week' },
+    { symbol: 'TITAN', sector: 'Consumer', score: 84, line: 'Above all averages, pulling back on light volume' },
+    { symbol: 'BAJFINANCE', sector: 'Finance', score: 81, line: 'Top 15% strength, 6% below its 52-week high' },
   ],
   swing: [
-    { symbol: 'TATASTEEL', sector: 'Metals', score: 78, line: { en: 'Five-week base, 1.2% below the breakout level', ml: 'അഞ്ച് ആഴ്ചത്തെ ബേസ്, ബ്രേക്ക്ഔട്ട് നിലയിൽ നിന്ന് 1.2% താഴെ' } },
-    { symbol: 'AXISBANK', sector: 'Banks', score: 73, line: { en: 'Near its rising 20-day EMA after a 7% run', ml: '7% ഉയർന്ന ശേഷം ഉയരുന്ന 20 ദിവസ EMA-ക്ക് അടുത്ത്' } },
-    { symbol: 'HINDUNILVR', sector: 'FMCG', score: 66, line: { en: 'RSI(2) at 12, above its 200-day average', ml: 'RSI(2) 12-ൽ, 200 ദിവസ ശരാശരിക്ക് മുകളിൽ' } },
+    { symbol: 'TATASTEEL', sector: 'Metals', score: 78, line: 'Five-week base, 1.2% below the breakout level' },
+    { symbol: 'AXISBANK', sector: 'Banks', score: 73, line: 'Near its rising 20-day EMA after a 7% run' },
+    { symbol: 'HINDUNILVR', sector: 'FMCG', score: 66, line: 'RSI(2) at 12, above its 200-day average' },
   ],
 };
 

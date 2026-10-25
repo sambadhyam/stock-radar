@@ -1,6 +1,6 @@
 // ui.js — shared interface components.
 import { h, s, icon, fmt, tone } from './util.js';
-import { t, pick } from './i18n.js';
+import { t } from './i18n.js';
 import { ICONS } from './icons.js';
 
 const HZ_LEVEL = { intraday: 1, swing: 2, medium: 3, long: 4 };
@@ -103,10 +103,10 @@ export function alertRow(a, onOpen) {
   return h('li', null, h('button', { type: 'button', class: 'row', onclick: () => onOpen(a) },
     h('span', { class: 'row-title' }, a.symbol),
     right,
-    h('span', { class: 'row-meta' }, horizonTag(a.horizon), h('span', null, pick(a.strategyName))),
+    h('span', { class: 'row-meta' }, horizonTag(a.horizon), h('span', null, a.strategyName)),
     h('span', { class: 'row-side' }, statusChip(a.status)),
     a.dir === 'exit'
-      ? h('span', { class: 'row-levels' }, pick(a.headline))
+      ? h('span', { class: 'row-levels' }, a.headline)
       : h('span', { class: 'row-levels num' },
         h('span', null, t('alert.stop') + ' ', h('b', null, fmt.price(a.stop))),
         h('span', null, t('alert.target') + ' ', h('b', null, fmt.price(a.targets[0]))),

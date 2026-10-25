@@ -1,6 +1,6 @@
 // Scan: ranked long / medium / swing lists, and the stock detail sheet.
 import { h, fmt, tone } from '../util.js';
-import { t, pick } from '../i18n.js';
+import { t } from '../i18n.js';
 import { screenHead, segmented, openSheet, kvList, previewBanner, alertRow } from '../ui.js';
 import { candleChart } from '../charts.js';
 import { getData } from '../data.js';
@@ -21,7 +21,7 @@ export function render({ data, query }) {
         h('span', { class: 'row-meta' }, h('span', null, r.sector),
           r.complete != null ? h('span', { class: r.complete < 90 ? 'faint' : '' }, t('scan.complete', { pct: r.complete })) : null),
         h('span'),
-        h('span', { class: 'row-levels' }, pick(r.line))))));
+        h('span', { class: 'row-levels' }, r.line)))));
     const etfs = tab === 'long' ? h('section', { class: 'sec' },
       h('h2', { class: 'sec-title' }, t('scan.etfs')),
       h('p', { class: 'sec-note' }, t('scan.etfsNote')),

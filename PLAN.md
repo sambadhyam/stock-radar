@@ -4,7 +4,7 @@ Personal NSE analysis, alerts and self-checking paper trading. Phone-only workfl
 
 - **App:** https://sambadhyam.github.io/stock-radar/
 - **Repo:** `sambadhyam/stock-radar`
-- **Status:** Phase 0 complete (plan, verified facts, UI design preview with sample data)
+- **Status:** Phase 1 complete (engine core in Apps Script). The app still shows sample data until Phase 4.
 
 ---
 
@@ -55,8 +55,9 @@ Nothing in this system can place an order. Under SEBI's retail-algo rules, API o
 4. **Storage.** Alerts, paper trades, strategy status, settings and logs live in the Sheet. Multi-year daily price history lives in Drive as packed JSON files, which keeps the Sheet small and fast and feeds the in-app backtester.
 5. **Login.** Daily at 08:50 with client code, MPIN and a TOTP generated inside Apps Script (RFC 6238 with HMAC-SHA1). Re-login on any auth error.
 6. **One copy of the trading logic.** `core/core.js` is a plain script (no import/export) so the same file runs in the browser for backtests and is pasted unchanged into Apps Script as `Core.gs`.
-7. **Bilingual messages.** The engine stores reasons as codes with parameters (for example `ORB_BREAK {level: 1406.5}`); the app turns them into English or Malayalam.
-8. **Security.** The Web App runs as the owner and requires the secret token on every call. Keys live only in Script Properties. The Angel One account holds no money. Portfolio data never goes into the public repo.
+7. **Keys entry.** Keys are typed into a form opened from the sheet's Stock Radar menu and go straight into Script Properties, so they never sit in the code, the sheet or its version history. A manual fallback function exists for when the form can't open.
+8. **Security.** The Web App runs as the owner and requires the secret token on every call. Keys live only in Script Properties and are masked out of every log and message. The Angel One account holds no money. Portfolio data never goes into the public repo.
+9. **English only.** Malayalam support was dropped at the owner's request in Phase 1.
 
 ---
 
@@ -108,12 +109,12 @@ stock-radar/
 ├── .nojekyll                serve files as-is on GitHub Pages
 ├── assets/
 │   ├── css/app.css          design tokens and components
-│   ├── fonts/               Anek Latin + Malayalam (OFL), self-hosted
+│   ├── fonts/               Anek Latin (OFL), self-hosted
 │   └── icons/               app icons
 ├── js/
 │   ├── app.js               shell, router, boot
 │   ├── util.js              DOM builder, Indian number formats, IST calendar
-│   ├── i18n.js              English and Malayalam text
+│   ├── i18n.js              all interface text
 │   ├── state.js             settings, theme, position sizing
 │   ├── ui.js                shared components (chips, track strip, sheets)
 │   ├── charts.js            SVG candle and equity charts
@@ -124,13 +125,14 @@ stock-radar/
 │   ├── backtest.js          (Phase 5) in-browser backtester
 │   └── screens/             home, alerts, scan, results, more, settings
 ├── core/core.js             (Phase 2) indicators, strategies, evaluator maths
-├── apps-script/             (Phase 1+) files to paste into the Apps Script editor
-│   ├── appsscript.json      manifest: Asia/Kolkata timezone, V8, scopes
-│   ├── Core.gs              identical copy of core/core.js
-│   ├── Data.gs              providers, TOTP login, failover, price history
-│   ├── Engine.gs            scheduler, intraday and EOD engines, evaluator, paper trading
-│   ├── Api.gs               Web App API, Telegram and Gmail
-│   └── Setup.gs             setupSecrets, setupSheets, installTriggers, test functions
+├── apps-script/             files to paste into the Apps Script editor (README.md has the steps)
+│   ├── appsscript.json      manifest: Asia/Kolkata timezone, V8
+│   ├── Setup.gs             Stock Radar menu, sheet creation, keys form, setup checks, status
+│   ├── Data.gs              settings, storage, keys, TOTP, Angel One / Google / Yahoo with failover, calendar, stock lists
+│   ├── Engine.gs            schedule, daily tick (pre-market, snapshots, closing summary), job runner and failure alerts
+│   ├── Api.gs               Telegram and email (Web App API added in Phase 4)
+│   └── Core.gs              (Phase 2) identical copy of core/core.js
+├── tools/gas-sim/           Node simulator of Apps Script services + tests for apps-script/ (run: node tools/gas-sim/tests.mjs)
 ├── PLAN.md                  this file
 ├── CLAUDE.md                conventions for future build sessions
 └── README.md
@@ -141,7 +143,7 @@ stock-radar/
 ## 8. UI design system
 
 - **Palette.** "Backwater night" petrol blue for dark mode, "Monsoon paper" cool grey-green for light mode. Turmeric is the only accent and marks actions and Live-ready trust. Green and red are reserved for gains and losses. All text pairs meet WCAG AA in both themes.
-- **Type.** Anek by Ek Type, one family covering Latin and Malayalam, self-hosted. Condensed widths for headlines, tabular figures for every price.
+- **Type.** Anek Latin by Ek Type, self-hosted. Condensed widths for headlines, tabular figures for every price.
 - **Signature element.** The ball-by-ball track record: 30 dots in five groups of six, like overs, filling green (target hit), red (stop hit) or hollow (expired) as paper trades close. A strategy has to fill its strip before it can be trusted with real money.
 - **Principles.** Evidence before advice. Plain sentences over jargon. Indian number grouping and IST everywhere. Thumb-first layout with bottom navigation and bottom sheets that close with the Android back button. Honest states for sample, stale or missing data.
 
@@ -152,8 +154,8 @@ stock-radar/
 | Phase | Deliverable | Status |
 |---|---|---|
 | 0 | Plan, verified facts, file tree, UI design preview | ✅ Done |
-| 1 | `setupSheets()`, providers, TOTP login, Telegram, scheduler, health log, test functions | Next |
-| 2 | `core.js` indicators and strategies, intraday engine, EOD scans, alert logging | |
+| 1 | `setupSheets()`, providers, TOTP login, Telegram, scheduler, health log, test functions | ✅ Done (23 simulator tests) |
+| 2 | `core.js` indicators and strategies, intraday engine, EOD scans, alert logging, price history backfill | Next |
 | 3 | Evaluator, metrics, auto paper trading, graduation, daily, weekly and readiness reports | |
 | 4 | Web App API, PWA wired to live data, settings synced to the engine | |
 | 5 | Backtester and Backtest Baseline report, portfolio import, optional AI summaries | |

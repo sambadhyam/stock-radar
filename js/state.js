@@ -1,12 +1,10 @@
 // state.js — user settings (stored on this phone; synced to the backend from Phase 4).
 import { store } from './util.js';
-import { setLang } from './i18n.js';
 
-export const APP_VERSION = '0.1.0';
+export const APP_VERSION = '0.2.0';
 
 export const DEFAULTS = Object.freeze({
   theme: 'system',          // 'system' | 'light' | 'dark'
-  lang: 'en',               // 'en' | 'ml'
   realCapital: 100000,      // ₹ used for real position sizing in alert cards
   paperCapital: 100000,     // ₹ virtual capital for paper trading
   riskPct: 1,               // % of capital lost if a stop-loss is hit
@@ -37,9 +35,8 @@ export function getSettings() { return settings; }
 export function saveSettings(patch) {
   settings = { ...settings, ...patch };
   store.set(KEY, settings);
-  // Theme and language are also kept as plain keys so index.html can apply them before first paint.
+  // Theme is also kept as a plain key so index.html can apply it before first paint.
   store.setRaw('sr.theme', settings.theme);
-  store.setRaw('sr.lang', settings.lang);
   applyLook();
   listeners.forEach((fn) => fn(settings));
   return settings;
@@ -47,13 +44,11 @@ export function saveSettings(patch) {
 
 export function onSettings(fn) { listeners.add(fn); return () => listeners.delete(fn); }
 
-/** Apply theme and language to the document. */
+/** Apply the theme to the document. */
 export function applyLook() {
   const root = document.documentElement;
   if (settings.theme === 'light' || settings.theme === 'dark') root.setAttribute('data-theme', settings.theme);
   else root.removeAttribute('data-theme');
-  root.lang = settings.lang === 'ml' ? 'ml' : 'en';
-  setLang(settings.lang);
   const dark = effectiveTheme() === 'dark';
   document.querySelectorAll('meta[name="theme-color"]').forEach((m) => m.setAttribute('content', dark ? '#0E252C' : '#EDF2F1'));
 }

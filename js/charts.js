@@ -2,7 +2,7 @@
 // candleChart: price candles with entry zone, stop-loss, targets, overlays and volume.
 // equityChart: paper-account equity against its starting capital.
 import { h, s, fmt, priceDecimals } from './util.js';
-import { t, getLang } from './i18n.js';
+import { t } from './i18n.js';
 
 const W = 340;
 
@@ -17,7 +17,7 @@ function niceStep(range, count) {
 function axisNum(v) { return fmt.num(v, Math.abs(v) >= 10000 ? 0 : priceDecimals(v)); }
 
 function timeLabel(ts, mode) {
-  return mode === 'intraday' ? fmt.time(ts) : fmt.dayMonth(ts, getLang());
+  return mode === 'intraday' ? fmt.time(ts) : fmt.dayMonth(ts);
 }
 
 /** Spread label centres so tags never overlap (minimum gap in px). */
@@ -196,15 +196,15 @@ export function equityChart({ points, base, height = 132, mini = false, label = 
       { y: y(maxV), v: maxV }, { y: y(minV), v: minV }, { y: y(base), v: base },
     ].filter((l, i, arr) => arr.findIndex((m) => m.v === l.v) === i), 14, padT + 6, H - padB - 4);
     for (const l of labels) svg.append(s('text', { x: x1 + 8, y: l.y + 3.5 }, fmt.money(l.v)));
-    svg.append(s('text', { x: 0, y: H - 4 }, fmt.dayMonth(points[0].t, getLang())));
-    svg.append(s('text', { x: x1, y: H - 4, 'text-anchor': 'end' }, fmt.dayMonth(points[n - 1].t, getLang())));
+    svg.append(s('text', { x: 0, y: H - 4 }, fmt.dayMonth(points[0].t)));
+    svg.append(s('text', { x: x1, y: H - 4, 'text-anchor': 'end' }, fmt.dayMonth(points[n - 1].t)));
   }
   const wrap = h('div', { class: 'chart' });
   if (!mini) {
     const read = h('div', { class: 'chart-read' });
     const xh = s('line', { y1: padT, y2: H - padB, class: 'xhair', visibility: 'hidden' });
     svg.append(xh);
-    const show = (i) => read.replaceChildren(h('span', null, fmt.dayMonth(points[i].t, getLang())), h('b', null, fmt.money(points[i].v)),
+    const show = (i) => read.replaceChildren(h('span', null, fmt.dayMonth(points[i].t)), h('b', null, fmt.money(points[i].v)),
       h('span', { class: points[i].v >= base ? 'gain' : 'loss' }, fmt.pct(((points[i].v - base) / base) * 100)));
     show(n - 1);
     const hit = s('rect', { x: 0, y: 0, width: x1, height: H, fill: 'transparent' });

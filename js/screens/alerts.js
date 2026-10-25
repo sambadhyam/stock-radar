@@ -1,6 +1,6 @@
 // Alerts: filterable feed, and the alert detail sheet with chart, plan, size and track record.
 import { h, fmt, icon, copyText } from '../util.js';
-import { t, pick, getLang } from '../i18n.js';
+import { t } from '../i18n.js';
 import { ICONS } from '../icons.js';
 import { getSettings, positionSize } from '../state.js';
 import {
@@ -64,7 +64,7 @@ export function openAlert(a) {
       h('div', { class: 'grow' },
         h('h2', { class: 'sheet-title' }, a.symbol),
         h('div', { class: 'sheet-sub' }, dirChip(a.dir), horizonTag(a.horizon, true), statusChip(a.status)),
-        h('div', { class: 'sheet-sub' }, h('span', null, pick(a.strategyName)), h('span', { class: 'faint num' }, `${fmt.dayMonth(a.time, getLang())} ${fmt.time(a.time)}`))),
+        h('div', { class: 'sheet-sub' }, h('span', null, a.strategyName), h('span', { class: 'faint num' }, `${fmt.dayMonth(a.time)} ${fmt.time(a.time)}`))),
       closeBtn);
 
     const chart = candleChart({
@@ -86,7 +86,7 @@ export function openAlert(a) {
         [t('alert.stop'), fmt.price(a.stop), 'loss'],
         ...a.targets.map((v, i) => [a.targets.length > 1 ? t('alert.target' + (i + 1)) : t('alert.target'), fmt.price(v), 'gain']),
         [t('alert.rr'), fmt.num(a.rr, 1)],
-        [t('alert.valid'), `${fmt.dayMonth(a.validTill, getLang())} ${fmt.time(a.validTill)}`],
+        [t('alert.valid'), `${fmt.dayMonth(a.validTill)} ${fmt.time(a.validTill)}`],
         [t('alert.confidence'), `${a.confidence}/100`],
       ]);
 
@@ -103,7 +103,7 @@ export function openAlert(a) {
 
     const record = h('div', null,
       h('h3', null, t('alert.record')),
-      h('div', { class: 'sheet-sub', style: { marginTop: 0 } }, h('span', null, pick(st.name)),
+      h('div', { class: 'sheet-sub', style: { marginTop: 0 } }, h('span', null, st.name),
         h('span', { class: 'faint' }, st.trades >= 30 ? t('results.tradesDone', { n: st.trades }) : t('results.trades', { n: st.trades }))),
       trackStrip(st.outcomes),
       stripLegend());
@@ -113,7 +113,7 @@ export function openAlert(a) {
         : a.status === 'live' ? t('status.liveNote', { win: st.win, n: st.trades }) : t('status.paperNote')));
 
     const orderText = isExit
-      ? [`EXIT ${a.symbol} (NSE)`, `Reason: ${pick(a.headline)}`, `Last price: ${fmt.price(a.lastPrice)}`, `Stock Radar ${a.status === 'live' ? '' : '[PAPER]'}`].join('\n')
+      ? [`EXIT ${a.symbol} (NSE)`, `Reason: ${a.headline}`, `Last price: ${fmt.price(a.lastPrice)}`, `Stock Radar ${a.status === 'live' ? '' : '[PAPER]'}`].join('\n')
       : [`BUY ${a.symbol} (NSE)`, size ? `Qty: ${size.qty}` : '', `Limit: ${fmt.price(mid)} (zone ${fmt.priceRange(a.entryLo, a.entryHi)})`,
         `Stop-loss: ${fmt.price(a.stop)}`, `Target: ${a.targets.map(fmt.price).join(' / ')}`,
         `${t('hz.' + a.horizon)} (${t('hzw.' + a.horizon)})`, `Stock Radar ${a.status === 'live' ? '' : '[PAPER]'}`].filter(Boolean).join('\n');
@@ -127,10 +127,10 @@ export function openAlert(a) {
 
     return h('div', null, head, chart, statusNote,
       h('h3', null, isExit ? t('alert.changed') : t('alert.plan')),
-      isExit ? h('p', { class: 'muted', style: { marginBottom: '10px' } }, pick(a.headline)) : null,
+      isExit ? h('p', { class: 'muted', style: { marginBottom: '10px' } }, a.headline) : null,
       plan, sizeBlock,
       h('h3', null, t('alert.why')),
-      h('ul', { class: 'bullets' }, a.why.map((w) => h('li', null, pick(w)))),
+      h('ul', { class: 'bullets' }, a.why.map((w) => h('li', null, w))),
       record, actions);
   }, { label: a.symbol });
 }

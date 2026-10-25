@@ -84,17 +84,17 @@ export const fmt = {
   },
   /** 14:32 in IST */
   time(d) { return new Intl.DateTimeFormat('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: false }).format(toDate(d)); },
-  /** Sunday, 25 October (localized) */
-  longDate(d, lang) {
-    return new Intl.DateTimeFormat(lang === 'ml' ? 'ml-IN' : 'en-IN', { timeZone: 'Asia/Kolkata', weekday: 'long', day: 'numeric', month: 'long' }).format(toDate(d));
+  /** Sunday, 25 October */
+  longDate(d) {
+    return new Intl.DateTimeFormat('en-IN', { timeZone: 'Asia/Kolkata', weekday: 'long', day: 'numeric', month: 'long' }).format(toDate(d));
   },
   /** 25 Oct 2026 */
-  shortDate(d, lang) {
-    return new Intl.DateTimeFormat(lang === 'ml' ? 'ml-IN' : 'en-IN', { timeZone: 'Asia/Kolkata', day: 'numeric', month: 'short', year: 'numeric' }).format(toDate(d));
+  shortDate(d) {
+    return new Intl.DateTimeFormat('en-IN', { timeZone: 'Asia/Kolkata', day: 'numeric', month: 'short', year: 'numeric' }).format(toDate(d));
   },
   /** 25 Oct */
-  dayMonth(d, lang) {
-    return new Intl.DateTimeFormat(lang === 'ml' ? 'ml-IN' : 'en-IN', { timeZone: 'Asia/Kolkata', day: 'numeric', month: 'short' }).format(toDate(d));
+  dayMonth(d) {
+    return new Intl.DateTimeFormat('en-IN', { timeZone: 'Asia/Kolkata', day: 'numeric', month: 'short' }).format(toDate(d));
   },
 };
 

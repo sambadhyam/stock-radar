@@ -1,6 +1,6 @@
 /* Stock Radar — design system and components
    Palette: "Backwater night" (dark) and "Monsoon paper" (light), turmeric accent.
-   Type: Anek (Latin + Malayalam, variable weight and width). */
+   Type: Anek Latin (variable weight and width). */
 
 @font-face {
   font-family: "Anek";
@@ -9,14 +9,6 @@
   font-stretch: 75% 125%;
   font-display: swap;
   unicode-range: U+0020-007E, U+00A0-00FF, U+2010-2027, U+2030-203A, U+20B9, U+2190-2193, U+2212, U+00D7;
-}
-@font-face {
-  font-family: "Anek";
-  src: url("../fonts/anek-malayalam.woff") format("woff");
-  font-weight: 100 800;
-  font-stretch: 75% 125%;
-  font-display: swap;
-  unicode-range: U+0D00-0D7F, U+200C-200D, U+25CC, U+0964-0965;
 }
 
 /* ---------- Tokens ---------- */
@@ -105,14 +97,13 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--text);
-  font-family: "Anek", system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans Malayalam", sans-serif;
+  font-family: "Anek", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   font-size: var(--fs-m);
   line-height: 1.45;
   font-variant-numeric: tabular-nums;
   -webkit-font-smoothing: antialiased;
   -webkit-tap-highlight-color: transparent;
 }
-:root:lang(ml) body { line-height: 1.6; }
 h1, h2, h3, p { margin: 0; }
 button { font: inherit; color: inherit; cursor: pointer; }
 a { color: var(--brand-text); }
@@ -149,12 +140,6 @@ a { color: var(--brand-text); }
 }
 .icon-btn:active { background: var(--surface-2); }
 .icon-btn svg { width: 22px; height: 22px; }
-.lang-btn {
-  height: 34px; padding: 0 12px; margin-right: 2px;
-  border-radius: 999px; border: 1px solid var(--line); background: transparent;
-  color: var(--text-2); font-weight: 650; font-size: 13.5px; line-height: 1;
-}
-.lang-btn:active { background: var(--surface-2); }
 
 .page { max-width: var(--page-max); margin: 0 auto; padding: 4px 16px calc(var(--nav-h) + 28px + env(safe-area-inset-bottom)); }
 main:focus { outline: none; }
@@ -214,7 +199,6 @@ main:focus { outline: none; }
   letter-spacing: -.005em;
   text-wrap: balance;
 }
-:root:lang(ml) .hero-title { font-size: 27px; line-height: 1.25; font-stretch: 85%; }
 .mkt { display: grid; grid-template-columns: 1fr auto auto; align-items: baseline; gap: 8px 14px; margin: 0; }
 .mkt dt { color: var(--text-2); }
 .mkt dd { margin: 0; text-align: right; }

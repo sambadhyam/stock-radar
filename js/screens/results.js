@@ -1,6 +1,6 @@
 // Results: strategy board with track records, paper trades, readiness and weekly reports.
 import { h, fmt, tone, istParts } from '../util.js';
-import { t, pick } from '../i18n.js';
+import { t } from '../i18n.js';
 import {
   screenHead, segmented, horizonTag, statusChip, trackStrip, stripLegend, openSheet, previewBanner, outcomeLabel,
 } from '../ui.js';
@@ -39,7 +39,7 @@ function metricsLine(st) {
 function strategyRow(st) {
   return h('li', null,
     h('button', { type: 'button', class: 'row', onclick: () => openStrategy(st) },
-      h('span', { class: 'row-title', style: { fontSize: '16px' } }, pick(st.name)),
+      h('span', { class: 'row-title', style: { fontSize: '16px' } }, st.name),
       h('span', { class: 'row-side' }, statusChip(st.status)),
       h('span', { class: 'row-meta' }, tradesLabel(st)),
       h('span'),
@@ -83,7 +83,7 @@ function paperTab(data) {
         return h('li', null, h('div', { class: 'row' },
           h('span', { class: 'row-title' }, o.symbol),
           h('span', { class: 'row-right num ' + tone(pct) }, fmt.pct(pct)),
-          h('span', { class: 'row-meta' }, horizonTag(o.horizon), h('span', null, pick(data.strategy(o.strategy).name))),
+          h('span', { class: 'row-meta' }, horizonTag(o.horizon), h('span', null, data.strategy(o.strategy).name)),
           h('span', { class: 'row-side num muted' }, t('results.qty', { n: fmt.int(o.qty) })),
           h('span', { class: 'row-levels num' },
             h('span', null, t('results.entryAt', { price: fmt.price(o.entry) })),
@@ -94,7 +94,7 @@ function paperTab(data) {
       h('ul', { class: 'list' }, p.closed.map((c) => h('li', null, h('div', { class: 'row' },
         h('span', { class: 'row-title' }, c.symbol),
         h('span', { class: 'row-right num ' + tone(c.pct) }, fmt.pct(c.pct)),
-        h('span', { class: 'row-meta' }, horizonTag(c.horizon), h('span', null, pick(data.strategy(c.strategy).name))),
+        h('span', { class: 'row-meta' }, horizonTag(c.horizon), h('span', null, data.strategy(c.strategy).name)),
         h('span', { class: 'row-side muted' }, outcomeLabel(c.state))))))));
 }
 
@@ -118,7 +118,7 @@ export function openStrategy(st) {
   openSheet((closeBtn) => h('div', null,
     h('div', { class: 'sheet-head' },
       h('div', { class: 'grow' },
-        h('h2', { class: 'sheet-title' }, pick(st.name)),
+        h('h2', { class: 'sheet-title' }, st.name),
         h('div', { class: 'sheet-sub' }, horizonTag(st.horizon, true), statusChip(st.status))),
       closeBtn),
     h('div', { class: 'sheet-sub', style: { marginTop: 0 } }, tradesLabel(st)),
@@ -130,7 +130,7 @@ export function openStrategy(st) {
     h('p', { class: 'note' }, t('results.backtestNote')),
     h('p', { class: 'note' }, t('results.rules')),
     h('button', { type: 'button', class: 'btn btn-ghost btn-block', style: { marginTop: '18px' }, disabled: true }, t('results.override')),
-    h('p', { class: 'note', style: { textAlign: 'center' } }, t('common.comingPhase', { n: 4 }))), { label: pick(st.name) });
+    h('p', { class: 'note', style: { textAlign: 'center' } }, t('common.comingPhase', { n: 4 }))), { label: st.name });
 }
 
 function compareTable(st) {

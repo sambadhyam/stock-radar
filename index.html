@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en-IN">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -15,11 +15,10 @@
   <link rel="preload" href="assets/fonts/anek-latin.woff" as="font" type="font/woff" crossorigin>
   <link rel="stylesheet" href="assets/css/app.css">
   <script>
-    // Apply saved theme and language before first paint (no flash). Storage may be unavailable.
+    // Apply the saved theme before first paint (no flash). Storage may be unavailable.
     try {
       var th = localStorage.getItem('sr.theme');
       if (th === 'light' || th === 'dark') document.documentElement.setAttribute('data-theme', th);
-      if (localStorage.getItem('sr.lang') === 'ml') document.documentElement.lang = 'ml';
     } catch (e) {}
   </script>
 </head>

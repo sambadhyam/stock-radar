@@ -1,6 +1,6 @@
 // Settings: capital and risk, watchlist, alert switches, strategies, appearance, backend connection.
 import { h, icon, fmt } from '../util.js';
-import { t, pick } from '../i18n.js';
+import { t } from '../i18n.js';
 import { ICONS } from '../icons.js';
 import { getSettings, saveSettings, LIMITS } from '../state.js';
 import { screenHead, segmented, toast } from '../ui.js';
@@ -34,7 +34,7 @@ function switchRow(id, title, sub, checked, disabled = false) {
   return { input, el: h('div', { class: 'srow' }, h('label', { class: 'srow-text', for: id }, h('span', null, title), sub ? h('small', null, sub) : null), input) };
 }
 
-export function render({ data, rerender }) {
+export function render({ data }) {
   const s = getSettings();
   let watch = [...s.watchlist];
   const off = new Set(s.strategiesOff);
@@ -65,7 +65,7 @@ export function render({ data, rerender }) {
   const pa = switchRow('f-pa', t('settings.paperAlerts'), t('settings.paperAlertsSub'), s.paperAlerts);
 
   const stratRows = data.strategies.map((st) => {
-    const r = switchRow('f-st-' + st.id, pick(st.name), t('hz.' + st.horizon), !off.has(st.id));
+    const r = switchRow('f-st-' + st.id, st.name, t('hz.' + st.horizon), !off.has(st.id));
     r.input.addEventListener('change', () => { if (r.input.checked) off.delete(st.id); else off.add(st.id); });
     return r.el;
   });
@@ -105,7 +105,7 @@ export function render({ data, rerender }) {
     h('section', { class: 'form-sec' },
       h('h2', null, t('settings.alerts')), tg.el, em.el, pa.el,
       h('button', { type: 'button', class: 'btn btn-ghost btn-block', style: { marginTop: '12px' }, disabled: true }, t('settings.testTg')),
-      h('p', { class: 'note faint', style: { textAlign: 'center', marginTop: '6px', fontSize: '12px' } }, t('common.comingPhase', { n: 1 }))),
+      h('p', { class: 'note faint', style: { textAlign: 'center', marginTop: '6px', fontSize: '12px' } }, t('common.comingPhase', { n: 4 }))),
     h('section', { class: 'form-sec' },
       h('h2', null, t('settings.strategies')),
       h('p', { class: 'sec-note' }, t('settings.strategiesSub')),
@@ -115,10 +115,7 @@ export function render({ data, rerender }) {
       h('div', { class: 'field' }, h('span', { class: 'label' }, t('settings.theme')),
         segmented([
           { value: 'system', label: t('theme.system') }, { value: 'light', label: t('theme.light') }, { value: 'dark', label: t('theme.dark') },
-        ], s.theme, (v) => saveSettings({ theme: v }), t('settings.theme'))),
-      h('div', { class: 'field' }, h('span', { class: 'label' }, t('settings.lang')),
-        segmented([{ value: 'en', label: 'English' }, { value: 'ml', label: 'മലയാളം' }], s.lang,
-          (v) => { saveSettings({ lang: v }); rerender(); }, t('settings.lang')))),
+        ], s.theme, (v) => saveSettings({ theme: v }), t('settings.theme')))),
     h('section', { class: 'form-sec' },
       h('h2', null, t('settings.connection')),
       h('div', { class: 'field' }, h('label', { for: 'f-url' }, t('settings.url')), url),
