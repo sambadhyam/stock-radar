@@ -1,7 +1,7 @@
 // state.js — user settings, kept on this phone. When the engine is connected, its settings win and are saved there too.
 import { store } from './util.js';
 
-export const APP_VERSION = '0.5.0';
+export const APP_VERSION = '0.5.1';
 
 export const DEFAULTS = Object.freeze({
   theme: 'system',          // 'system' | 'light' | 'dark'
@@ -13,6 +13,10 @@ export const DEFAULTS = Object.freeze({
   telegram: true,
   emailDigest: true,
   paperAlerts: true,
+  intradayFollowNifty: true,       // buys only while Nifty 50 is above today's open, shorts only below
+  intradayBlockBuysInBear: false,  // no intraday buys on Bear-regime days
+  intradayBlockShortsInBull: false,// no intraday shorts on Bull-regime days
+  intradayOneAlertPerStock: true,  // one intraday alert per stock per day
   strategiesOff: [],        // strategy ids switched off
   backendUrl: '',
   token: '',

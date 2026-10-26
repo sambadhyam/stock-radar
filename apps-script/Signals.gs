@@ -379,10 +379,19 @@ var Scans = {
       if (m && m.angelToken && tv >= P.minTradedValueCr) items.push({ key: sym, token: String(m.angelToken), from: from, to: now });
     });
     if (!items.length) return { skipped: 'No intraday stocks pass the liquidity filter' };
+    // Nifty 50's own 5-minute bars give the day's direction (up or down since the open).
+    var NIFTY = 'NIFTY 50', niftyMeta = meta[NIFTY];
+    if (niftyMeta && niftyMeta.angelToken) items.unshift({ key: NIFTY, token: String(niftyMeta.angelToken), from: from, to: now });
     var res = Angel.candlesMany(items, 'FIVE_MINUTE', { deadline: deadline });
+    var done = function (b) { return b.t + 300000 <= nowMs - 15000; }; // completed bars only
+    var niftyBars = (res.data[NIFTY] || []).filter(done);
+    delete res.data[NIFTY];
+    var follow = Config.get('intradayFollowNifty') !== false;
+    var block = { BUY: Config.get('intradayBlockBuysInBear') === true ? ['BEAR'] : [], SHORT: Config.get('intradayBlockShortsInBull') === true ? ['BULL'] : [] };
+    var dayNote = follow && !SRCore.dayDirection(niftyBars, nowMs - 300000) ? '; no Nifty 50 bars for today, so the day-direction check was skipped' : '';
     var signals = [], shadows = [], stale = 0, scanned = 0, lastEntry = Config.minutesOf('noEntriesAfter'), tracks = StrategyBook.tracks();
     Object.keys(res.data).forEach(function (sym) {
-      var bars = res.data[sym].filter(function (b) { return b.t + 300000 <= nowMs - 15000; }); // completed bars only
+      var bars = res.data[sym].filter(done);
       if (!bars.length) { stale++; return; }
       var lastEnd = bars[bars.length - 1].t + 300000;
       if (SRCore.util.istDay(bars[bars.length - 1].t) !== SRCore.util.istDay(nowMs) || nowMs - lastEnd > 7 * 60000) { stale++; return; }
@@ -390,6 +399,7 @@ var Scans = {
       var r = SRCore.scanIntraday(sym, bars, {
         params: P, regime: reg, strategies: ids, prevClose: ctx.s[sym][0], tradedValueCr: ctx.s[sym][1],
         nowMs: nowMs, lastEntryMinute: lastEntry, tracks: tracks,
+        niftyBars: niftyBars.length ? niftyBars : null, followNifty: follow, block: block,
       });
       signals = signals.concat(r.signals);
       shadows = shadows.concat(r.shadow || []);
@@ -398,7 +408,7 @@ var Scans = {
     var out = AlertBook.publish(fresh, { nowMs: nowMs, source: 'Angel One 5-minute candles' });
     if (Config.get('shadowTracking') !== false) AlertBook.publish(IntraSeen.filter(today, shadows, nowMs, 'S|'), { nowMs: nowMs, source: 'Angel One 5-minute candles', shadow: true });
     Health.log('intradayScan', 'angel', scanned > 0, Date.now() - t0, scanned,
-      scanned + ' scanned, ' + stale + ' without fresh bars, ' + Object.keys(res.failed).length + ' failed, ' + res.left.length + ' left for time; ' + fresh.length + ' new signals', 30);
+      scanned + ' scanned, ' + stale + ' without fresh bars, ' + Object.keys(res.failed).filter(function (k) { return k !== NIFTY; }).length + ' failed, ' + res.left.length + ' left for time; ' + fresh.length + ' new signals' + dayNote, 30);
     if (!scanned && items.length) throw new Error('No fresh 5-minute candles for any intraday stock (' + Object.keys(res.failed).length + ' failed, ' + stale + ' stale)');
     return { scanned: scanned, stale: stale, signals: fresh.length, logged: out.logged, sent: out.sent };
   },
@@ -569,26 +579,43 @@ var Scans = {
 
 /* ============================== Same-day repeats ============================== */
 
-/** Intraday: one alert per stock, strategy and direction per day, and a cooldown between any two. */
+/**
+ * Intraday repeats. With intradayOneAlertPerStock (the default): one alert per stock per day, the strongest
+ * signal winning when several strategies fire on the same bar. Otherwise: one per stock, strategy and direction
+ * per day, with a cooldown between any two from the same strategy. Shadows (prefix 'S|') follow the same rule
+ * separately. Times are kept as minutes after midnight so the record stays small.
+ */
 var IntraSeen = {
   KEY: 'INTRA_SEEN',
   load: function (today) {
     var s = null;
     try { s = JSON.parse(Secrets.props().getProperty(this.KEY) || 'null'); } catch (e) { s = null; }
-    return s && s.day === today ? s : { day: today, k: {} };
+    return s && s.day === today && s.v === 2 ? s : { v: 2, day: today, k: {} };
   },
   filter: function (today, signals, nowMs, prefix) {
-    var s = this.load(today), cool = (Number(Config.get('alertCooldownMinutes')) || 60) * 60000, out = [];
+    var s = this.load(today), coolMin = Number(Config.get('alertCooldownMinutes')) || 60, out = [];
+    var onePer = Config.get('intradayOneAlertPerStock') !== false, nowMin = SRCore.util.istMinute(nowMs);
     prefix = prefix || '';
-    signals.forEach(function (sig) {
-      var full = prefix + sig.symbol + '|' + sig.strategy + '|' + sig.direction, pair = prefix + sig.symbol + '|' + sig.strategy;
-      if (s.k[full]) return;
-      if (s.k[pair] && nowMs - s.k[pair] < cool) return;
-      s.k[full] = nowMs; s.k[pair] = nowMs;
+    signals.slice().sort(function (a, b) { return (b.confidence || 0) - (a.confidence || 0); }).forEach(function (sig) {
+      var stock = prefix + sig.symbol, pair = stock + '|' + sig.strategy, full = pair + '|' + sig.direction;
+      if (onePer) {
+        if (s.k[stock] !== undefined) return;
+        s.k[stock] = nowMin;
+      } else {
+        if (s.k[full] !== undefined) return;
+        if (s.k[pair] !== undefined && nowMin - s.k[pair] < coolMin) return;
+        s.k[full] = nowMin; s.k[pair] = nowMin;
+      }
       out.push(sig);
     });
     var json = JSON.stringify(s);
-    if (json.length > 8500) { s.k = {}; out.forEach(function (sig) { s.k[prefix + sig.symbol + '|' + sig.strategy + '|' + sig.direction] = nowMs; }); json = JSON.stringify(s); }
+    if (json.length > 8500) {
+      // Keep the per-stock marks (they matter most) and drop the rest.
+      var keep = {};
+      Object.keys(s.k).forEach(function (k) { if (k.indexOf('|') < 0 || (k.indexOf('S|') === 0 && k.split('|').length === 2)) keep[k] = s.k[k]; });
+      s.k = keep;
+      json = JSON.stringify(s);
+    }
     Secrets.props().setProperty(this.KEY, json);
     return out;
   },
@@ -672,7 +699,7 @@ var AlertBook = {
         qty: size.qty, window: win.text, telegram: '', track: isShadow ? 'shadow' : 'main',
       };
       var why = '';
-      if (isShadow) why = 'blocked by the ' + SRCore.regimeName(regime ? regime.state : 'UNKNOWN') + ' regime, tracked silently';
+      if (isShadow) why = (sig.blocked || 'blocked by the ' + SRCore.regimeName(regime ? regime.state : 'UNKNOWN') + ' regime') + ', tracked silently';
       else if (!tgOn) why = 'Telegram off';
       else if (st.status === 'REJECTED') why = 'strategy rejected (kept as paper only)';
       else if (st.status === 'PAPER' && !paperOk) why = 'paper alerts off';

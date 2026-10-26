@@ -117,6 +117,8 @@ export function coreTests({ test, eq, ok, root }) {
       const x = sh.signals[0];
       eq(x.direction, 'SHORT');
       ok(x.stop > x.entry && x.target1 < x.entry && x.rr >= 1.5, JSON.stringify(x));
+      eq(C.scanIntraday('TCS', mirror(bars), opts).signals.length, 1, 'shorts are allowed on Bull days by default');
+      eq(C.scanIntraday('TCS', bars, { ...opts, regime: bear }).signals.length, 1, 'buys are allowed on Bear days by default');
       eq(C.scanIntraday('TCS', bars, { ...opts, lastEntryMinute: C.util.istMinute(bars[bars.length - 1].t) }).signals.length, 0, 'no entries after the cut-off');
       eq(C.scanIntraday('TCS', bars, { ...opts, tradedValueCr: 2 }).signals.length, 0, 'liquidity filter');
     });
@@ -169,16 +171,60 @@ export function coreTests({ test, eq, ok, root }) {
     ok(C.confidence(70, { trades: 6, winRatePct: 20, profitFactor: 0.5 }) < 70, 'a poor record lowers it');
   });
 
-  test('core: a signal blocked only by the regime comes back as a shadow signal', () => {
+  test('core: a signal blocked only by the market filters comes back as a shadow signal', () => {
     const k = S.daily['base-breakout']();
     const r = C.scanDaily('TEST', k, { regime: bear, strategies: ['base-breakout'] });
     eq(r.signals.length, 0); eq(r.shadow.length, 1, 'shadow');
     ok(r.shadow[0].shadow === true && r.shadow[0].symbol === 'TEST' && r.shadow[0].rr >= 2, JSON.stringify(r.shadow[0]));
+    eq(r.shadow[0].blocked, 'blocked by the Bear regime');
     const bars = S.intraday.orb();
-    const ri = C.scanIntraday('TCS', bars, { regime: bear, strategies: ['orb'], prevClose: 100, tradedValueCr: 500, nowMs: bars[bars.length - 1].t + 360000, lastEntryMinute: 870 });
-    eq(ri.signals.length, 0); eq(ri.shadow.length, 1, 'intraday buy in a Bear regime is tracked silently');
+    const o = { regime: bear, strategies: ['orb'], prevClose: 100, tradedValueCr: 500, nowMs: bars[bars.length - 1].t + 360000, lastEntryMinute: 870 };
+    const ri = C.scanIntraday('TCS', bars, { ...o, block: { BUY: ['BEAR'], SHORT: ['BULL'] } });
+    eq(ri.signals.length, 0); eq(ri.shadow.length, 1, 'your Bear-day switch: the buy is tracked silently');
+    eq(ri.shadow[0].blocked, 'blocked by your setting: no intraday buys on Bear days');
+    eq(C.scanIntraday('TCS', bars, { ...o, regime: bull, block: { BUY: ['BEAR'], SHORT: ['BULL'] } }).signals.length, 1, 'the switch acts only on Bear days');
+    const sb = C.scanIntraday('TCS', mirror(bars), { ...o, regime: bull, block: { BUY: [], SHORT: ['BULL'] } });
+    eq(sb.shadow.length, 1); ok(/no intraday shorts on Bull days/.test(sb.shadow[0].blocked), sb.shadow[0].blocked);
     eq(C.scanDaily('TEST', k, { regime: { state: 'UNKNOWN' }, strategies: ['base-breakout'] }).shadow.length, 0, 'no shadows without a known regime');
     eq(C.scanDaily('TEST', k, { regime: bear, strategies: ['base-breakout'], params: C.params({ minRROther: 9 }) }).shadow.length, 0, 'other checks still apply');
+  });
+
+  test('core: trading with the day — buys need Nifty 50 above its open, shorts below', () => {
+    const bars = S.intraday.orb(), last = bars[bars.length - 1].t;
+    const o = { regime: bull, strategies: ['orb'], prevClose: 100, tradedValueCr: 500, nowMs: last + 360000, lastEntryMinute: 870 };
+    const up = S.niftyIntraday(1), down = S.niftyIntraday(-1);
+    const d = C.dayDirection(up, last);
+    eq(d.dir, 'UP'); eq(d.open, 22600); eq(d.pct, 0.24, 'six bars of +0.04% by the 09:40 bar');
+    eq(C.dayDirection(down, last).dir, 'DOWN');
+    eq(C.dayDirection(up.filter((b) => !(C.util.istMinute(b.t) === 555 && C.util.istDay(b.t) === C.util.istDay(last))), last), null, 'no 09:15 bar, no direction');
+    eq(C.dayDirection([], last), null);
+    const withUp = C.scanIntraday('TCS', bars, { ...o, niftyBars: up, followNifty: true });
+    eq(withUp.signals.length, 1);
+    ok(withUp.signals[0].reasons.some((x) => /^Nifty 50 is up 0\.24% since the open \(22,600\.00 → 22,654\.\d\d\)\.$/.test(x)), withUp.signals[0].reasons.join(' | '));
+    const withDown = C.scanIntraday('TCS', bars, { ...o, niftyBars: down, followNifty: true });
+    eq(withDown.signals.length, 0); eq(withDown.shadow.length, 1, 'a buy against a falling day is tracked silently');
+    eq(withDown.shadow[0].blocked, 'against the day: Nifty 50 is down 0.24% since the open');
+    const off = C.scanIntraday('TCS', bars, { ...o, niftyBars: down, followNifty: false });
+    eq(off.signals.length, 1, 'switch off: the buy goes out'); ok(off.signals[0].reasons.some((x) => /down 0\.24%/.test(x)), 'with the day noted');
+    eq(C.scanIntraday('TCS', mirror(bars), { ...o, niftyBars: up, followNifty: true }).shadow.length, 1, 'a short against a rising day waits');
+    eq(C.scanIntraday('TCS', mirror(bars), { ...o, niftyBars: down, followNifty: true }).signals.length, 1, 'a short with a falling day goes out');
+    eq(C.scanIntraday('TCS', bars, { ...o, followNifty: true }).signals.length, 1, 'no Nifty bars: no check');
+  });
+
+  test('core: graduation also needs the trades spread over enough different days', () => {
+    const rules = { minTrades: 30, minDays: 15, minPF: 1.3, maxDrawdownPct: 15 };
+    const day = (n) => Date.parse('2026-09-01T10:00:00+05:30') + n * 86400000;
+    const many = (nDays) => Array.from({ length: 32 }, (_, i) => ({ netPct: i % 3 ? 1.2 : -0.5, netPnl: i % 3 ? 120 : -50, exitT: day(i % nDays) + 3600000 + i, dayT: day(i % nDays), alphaPct: 0.3 }));
+    const m3 = C.metrics(many(3));
+    eq(m3.days, 3); eq(m3.trades, 32);
+    const g3 = C.graduate(m3, rules);
+    eq(g3.status, 'PAPER'); ok(/only 3 of 15 different trading days/.test(g3.reason), g3.reason);
+    eq(C.graduate({ ...m3, expectancyPct: -0.4 }, rules).status, 'PAPER', 'not rejected on a few days either');
+    const m20 = C.metrics(many(20)), g20 = C.graduate(m20, rules);
+    eq(m20.days, 20); eq(g20.status, 'LIVE_READY', g20.reason); ok(/32 trades on 20 days/.test(g20.reason), g20.reason);
+    eq(C.graduate({ ...m20, expectancyPct: -0.4 }, rules).status, 'REJECTED');
+    eq(C.metrics([{ netPct: 1, exitT: day(1) }, { netPct: 1, exitT: day(1) + 60000 }]).days, 1, 'falls back to the exit day');
+    ok(/0 of 30 closed paper trades, on 0 of 15 different days/.test(C.graduate(C.metrics([]), rules).reason), 'needs-more-data note mentions days');
   });
 
   // Daily-style candles for the trade simulator: t is a running day number, barMs 0.

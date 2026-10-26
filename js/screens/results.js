@@ -28,6 +28,9 @@ export function render({ data, query }) {
 }
 
 function tradesLabel(st) {
+  // Live data carries how many different days the trades came from; graduation needs enough of both.
+  const need = (getData().rules && getData().rules.minDays) || 15;
+  if (st.days != null && st.trades && (st.trades < 30 || st.days < need)) return t('results.tradesDays', { n: st.trades, d: st.days, need });
   return st.trades >= 30 ? t('results.tradesDone', { n: st.trades }) : t('results.trades', { n: st.trades });
 }
 

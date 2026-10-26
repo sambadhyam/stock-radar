@@ -86,6 +86,13 @@ export function intradayFrom(prevYmd, todayYmd, todayBars, { prevPrice = 100, pr
   return bars;
 }
 
+/** Nifty 50 5-minute bars: a flat Friday, then Monday opening at 22,600 and drifting up (dir 1) or down (dir −1). No volume, like the index. */
+export function niftyIntraday(dir = 1, n = 30) {
+  const t = []; let p = 22600;
+  for (let k = 0; k < n; k++) { const o = p; p *= 1 + dir * 0.0004; t.push([r2(o), r2(Math.max(o, p) + 2), r2(Math.min(o, p) - 2), r2(p), 0]); }
+  return intradayFrom('2026-10-23', '2026-10-26', t, { prevPrice: 22600, prevVol: 0 });
+}
+
 export const intraday = {
   // prev close 100. Opening range 15 minutes 100.0–101.0, then quiet, then a high-volume breakout.
   orb: () => intradayFrom('2026-10-23', '2026-10-26', [

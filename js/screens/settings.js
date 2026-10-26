@@ -68,6 +68,14 @@ export function render({ data, rerender }) {
   const em = switchRow('f-em', t('settings.email'), t('settings.emailSub'), s.emailDigest);
   const pa = switchRow('f-pa', t('settings.paperAlerts'), t('settings.paperAlertsSub'), s.paperAlerts);
 
+  // Intraday rules (engine Config keys of the same names).
+  const INTRA = [
+    ['intradayFollowNifty', 'f-in-day', 'settings.followNifty'],
+    ['intradayBlockBuysInBear', 'f-in-bear', 'settings.blockBuysBear'],
+    ['intradayBlockShortsInBull', 'f-in-bull', 'settings.blockShortsBull'],
+    ['intradayOneAlertPerStock', 'f-in-one', 'settings.onePerStock'],
+  ].map(([key, id, label]) => ({ key, ...switchRow(id, t(label), t(label + 'Sub'), !!s[key]) }));
+
   const stratRows = data.strategies.map((st) => {
     const r = switchRow('f-st-' + st.id, st.name, t('hz.' + st.horizon), !off.has(st.id));
     r.input.addEventListener('change', () => { if (r.input.checked) off.delete(st.id); else off.add(st.id); });
@@ -120,6 +128,7 @@ export function render({ data, rerender }) {
       riskPct: Number(risk.input.value), maxPerStockPct: Number(maxStock.input.value),
       watchlist: watch, telegram: tg.input.checked, emailDigest: em.input.checked, paperAlerts: pa.input.checked,
     };
+    INTRA.forEach((r) => { patch[r.key] = r.input.checked; });
     const watchChanged = watch.join() !== s.watchlist.join();
     saveSettings({ ...patch, strategiesOff: [...off] });
     if (!connected) { toast(t('settings.saved')); return; }
@@ -142,6 +151,10 @@ export function render({ data, rerender }) {
       h('h2', null, t('settings.alerts')), tg.el, em.el, pa.el,
       tgBtn,
       connected ? null : h('p', { class: 'note faint', style: { textAlign: 'center', marginTop: '6px', fontSize: '12px' } }, t('settings.needConnect'))),
+    h('section', { class: 'form-sec' },
+      h('h2', null, t('settings.intraday')),
+      h('p', { class: 'sec-note' }, t('settings.intradayNote')),
+      INTRA.map((r) => r.el)),
     h('section', { class: 'form-sec' },
       h('h2', null, t('settings.strategies')),
       h('p', { class: 'sec-note' }, t('settings.strategiesSub')),

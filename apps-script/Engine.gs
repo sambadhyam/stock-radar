@@ -290,6 +290,11 @@ var Engine = {
       var ctx = Market.prepareIntraday(today);
       var n = Object.keys(ctx.s).length, ids = StrategyBook.enabled(['INTRADAY']);
       lines.push('Intraday: ' + n + ' stocks, ' + ids.length + ' strategies, checked after every 5-minute bar until ' + Config.get('noEntriesAfter') + '.');
+      var rules = [Config.get('intradayFollowNifty') !== false ? 'buys while Nifty 50 is above its open, shorts while it is below' : 'buys and shorts all day'];
+      if (Config.get('intradayBlockBuysInBear') === true && reg.state === 'BEAR') rules.push('no buys today (Bear day, your setting)');
+      if (Config.get('intradayBlockShortsInBull') === true && reg.state === 'BULL') rules.push('no shorts today (Bull day, your setting)');
+      if (Config.get('intradayOneAlertPerStock') !== false) rules.push('one alert per stock');
+      lines.push('Intraday rules: ' + rules.join('; ') + '.');
       if (ctx.stale) lines.push('⚠️ ' + ctx.stale + ' stocks have no candle for the last session in the price history.');
       if (reg.state === 'UNKNOWN') lines.push('⚠️ No signals until the regime is known.');
     } catch (e) {
@@ -351,7 +356,7 @@ var Engine = {
     var all = AlertBook.today(today);
     var list = all.filter(function (a) { return (a.track || 'main') !== 'shadow'; });
     var shadowN = all.length - list.length;
-    var shadowLine = shadowN ? shadowN + ' more signal' + (shadowN > 1 ? 's were' : ' was') + ' blocked by the regime and paper-tracked silently, to test the filter.' : '';
+    var shadowLine = shadowN ? shadowN + ' more signal' + (shadowN > 1 ? 's were' : ' was') + ' blocked by the market filters (regime, your switches or the day\'s direction) and paper-tracked silently, to test them.' : '';
     if (!list.length) {
       out.push('<b>Signals today</b>: none.' + (day.eodScan && day.eodScan.scanned ? ' ' + day.eodScan.scanned + ' stocks checked at the close.' : ''));
       if (shadowLine) out.push(shadowLine);

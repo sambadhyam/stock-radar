@@ -16,7 +16,7 @@
 var SRCore = (function () {
   'use strict';
 
-  var VERSION = '0.4.0';
+  var VERSION = '0.5.1';
   var OPEN_MIN = 555;   // 09:15 IST in minutes after midnight
   var CLOSE_MIN = 930;  // 15:30 IST
   var ALL_REGIMES = ['BULL', 'NEUTRAL', 'BEAR', 'HIGH_VOL'];
@@ -225,13 +225,15 @@ var SRCore = (function () {
   /* ============================== Strategies list ============================== */
 
   var BUY_UP = { BUY: ['BULL', 'NEUTRAL'] };
-  var INTRA = { BUY: ['BULL', 'NEUTRAL', 'HIGH_VOL'], SHORT: ['BEAR', 'NEUTRAL', 'HIGH_VOL'] };
+  // Intraday strategies may buy or short in any regime. The engine narrows this with your switches
+  // (no buys on Bear days, no shorts on Bull days) and with the day's direction (see finalize).
+  var INTRA = { BUY: ALL_REGIMES, SHORT: ALL_REGIMES };
 
   var STRATEGIES = [
     { id: 'orb', name: 'Opening-range breakout', horizon: 'INTRADAY', kind: 'intraday', regimes: INTRA },
     { id: 'vwap', name: 'VWAP reclaim', horizon: 'INTRADAY', kind: 'intraday', regimes: INTRA },
     { id: 'ema-cross', name: 'EMA 9/21 cross', horizon: 'INTRADAY', kind: 'intraday', regimes: INTRA },
-    { id: 'gap', name: 'Gap and go / gap fill', horizon: 'INTRADAY', kind: 'intraday', regimes: { BUY: ALL_REGIMES, SHORT: ALL_REGIMES } },
+    { id: 'gap', name: 'Gap and go / gap fill', horizon: 'INTRADAY', kind: 'intraday', regimes: INTRA },
     { id: 'base-breakout', name: 'Base breakout', horizon: 'SWING', kind: 'daily', regimes: BUY_UP },
     { id: 'ema-pullback', name: 'Pullback to 20 EMA', horizon: 'SWING', kind: 'daily', regimes: BUY_UP },
     { id: 'rsi2', name: 'RSI(2) dip in uptrend', horizon: 'SWING', kind: 'daily', regimes: BUY_UP },
@@ -737,15 +739,52 @@ var SRCore = (function () {
   function horizonKey(h) { return h === 'INTRADAY' ? 'intraday' : h === 'SWING' ? 'swing' : h === 'MEDIUM' ? 'medium' : 'long'; }
 
   /**
+   * Nifty 50's direction since today's open, as of the close of the 5-minute bar starting at t.
+   * niftyBars: Nifty 50 5-minute candles (today's must start at 09:15). Returns {dir: 'UP'|'DOWN'|'FLAT',
+   * open, close, pct}, or null when today's Nifty bars are missing.
+   */
+  function dayDirection(niftyBars, t) {
+    if (!niftyBars || !niftyBars.length || !num(t)) return null;
+    var day = istDay(t), open = null, close = null;
+    for (var i = 0; i < niftyBars.length; i++) {
+      var b = niftyBars[i];
+      if (istDay(b.t) !== day) continue;
+      if (b.t > t) break;
+      if (open === null) { if (istMinute(b.t) !== OPEN_MIN) return null; open = b.o; }
+      close = b.c;
+    }
+    if (!(open > 0) || !num(close)) return null;
+    return { dir: close > open ? 'UP' : close < open ? 'DOWN' : 'FLAT', open: open, close: close, pct: round((close / open - 1) * 100, 2) };
+  }
+
+  /** "Nifty 50 is up 0.42% since the open." */
+  function dayLine(day) {
+    return 'Nifty 50 is ' + (day.dir === 'FLAT' ? 'flat' : (day.dir === 'UP' ? 'up ' : 'down ') + Math.abs(day.pct).toFixed(2) + '%') + ' since the open (' +
+      inr(day.open).replace('₹', '') + ' → ' + inr(day.close).replace('₹', '') + ').';
+  }
+
+  /**
    * Round levels to the tick, work out reward-to-risk and apply the checks every signal must pass.
-   * Returns {signal}, or {rejected: 'reason'}. A signal that passes everything except the market regime
-   * also comes back as {rejected, shadow: signal}, so it can be paper-tracked silently to test the regime filter.
+   * Returns {signal}, or {rejected: 'reason'}. A signal that passes every check except the market filters
+   * also comes back as {rejected, shadow: signal}, so it can be paper-tracked silently to test those filters.
+   * The market filters, in order:
+   *   - the regimes the strategy may fire in
+   *   - o.block: your switches, e.g. {BUY: ['BEAR'], SHORT: ['BULL']} for no intraday buys on Bear days
+   *   - o.day: the day's direction from dayDirection(); a buy needs Nifty 50 above today's open, a short below
+   * A blocked signal carries `blocked`, a short plain-English reason.
    */
   function finalize(raw, st, P, o) {
     var dir = raw.direction, isExit = dir === 'EXIT', regimeState = (o.regime && o.regime.state) || 'UNKNOWN';
     var allowed = (st.regimes && st.regimes[dir]) || [];
     var regimeOk = allowed.indexOf(regimeState) >= 0;
     var regimeWhy = 'regime ' + regimeName(regimeState) + ' does not allow ' + dir;
+    var blocked = regimeOk ? '' : 'blocked by the ' + regimeName(regimeState) + ' regime';
+    if (!blocked && o.block && o.block[dir] && o.block[dir].indexOf(regimeState) >= 0) {
+      blocked = 'blocked by your setting: no intraday ' + (dir === 'SHORT' ? 'shorts' : 'buys') + ' on ' + regimeName(regimeState) + ' days';
+    }
+    if (!blocked && o.day && ((dir === 'BUY' && o.day.dir === 'DOWN') || (dir === 'SHORT' && o.day.dir === 'UP'))) {
+      blocked = 'against the day: Nifty 50 is ' + (o.day.dir === 'UP' ? 'up ' : 'down ') + Math.abs(o.day.pct).toFixed(2) + '% since the open';
+    }
     var sig = {
       strategy: st.id, strategyName: st.name, horizon: st.horizon, direction: dir,
       entry: tickRound(raw.entry), entryLow: tickRound(Math.min(raw.entryLow, raw.entryHigh), 'down'), entryHigh: tickRound(Math.max(raw.entryLow, raw.entryHigh), 'up'),
@@ -779,7 +818,11 @@ var SRCore = (function () {
     if (!num(o.tradedValueCr)) return { rejected: 'no volume history for the liquidity check' };
     if (o.tradedValueCr < P.minTradedValueCr) return { rejected: 'average traded value ₹' + round(o.tradedValueCr, 1) + ' crore is below ₹' + P.minTradedValueCr + ' crore' };
     sig.confidence = confidence(sig.ruleScore, o.track);
-    if (!regimeOk) return regimeState === 'UNKNOWN' ? { rejected: regimeWhy } : { rejected: regimeWhy, shadow: sig };
+    if (blocked) {
+      if (regimeState === 'UNKNOWN') return { rejected: regimeWhy };
+      sig.blocked = blocked;
+      return { rejected: regimeOk ? blocked : regimeWhy, shadow: sig };
+    }
     return { signal: sig };
   }
 
@@ -831,7 +874,9 @@ var SRCore = (function () {
 
   /**
    * Intraday strategies on 5-minute bars (yesterday's and today's, completed bars only).
-   * opts: {params, regime, strategies, prevClose, tradedValueCr, nowMs, lastEntryMinute, tracks}
+   * opts: {params, regime, strategies, prevClose, tradedValueCr, nowMs, lastEntryMinute, tracks,
+   *        niftyBars (Nifty 50 5-minute bars, for the day's direction), followNifty (true: buy only while
+   *        Nifty 50 is above today's open, short only below), block ({BUY: [regimes], SHORT: [regimes]})}
    */
   function scanIntraday(symbol, bars, opts) {
     opts = opts || {};
@@ -841,14 +886,17 @@ var SRCore = (function () {
     if (x.today < 1 || i < x.i0) return out;
     var endMin = x.minute(i) + 5;
     if (num(opts.lastEntryMinute) && endMin > opts.lastEntryMinute) return out;
+    var day = opts.niftyBars ? dayDirection(opts.niftyBars, bars[i].t) : null;
     wanted(opts.strategies, ['intraday']).forEach(function (st) {
       var raw = null;
       try { raw = INTRADAY[st.id](x, i, P, opts); } catch (e) { out.rejected.push({ strategy: st.id, why: 'error: ' + e.message }); return; }
       if (!raw) return;
-      var f = finalize(raw, st, P, { regime: opts.regime, tradedValueCr: opts.tradedValueCr, track: opts.tracks && opts.tracks[st.id] });
-      if (f.signal) { f.signal.symbol = symbol; f.signal.barTime = bars[i].t; f.signal.barEnd = hhmm(endMin); out.signals.push(f.signal); }
+      var f = finalize(raw, st, P, { regime: opts.regime, tradedValueCr: opts.tradedValueCr, track: opts.tracks && opts.tracks[st.id], block: opts.block, day: opts.followNifty ? day : null });
+      var s = f.signal || f.shadow;
+      if (s) { s.symbol = symbol; s.barTime = bars[i].t; s.barEnd = hhmm(endMin); if (day) s.reasons = s.reasons.concat([dayLine(day)]); }
+      if (f.signal) out.signals.push(f.signal);
       else out.rejected.push({ strategy: st.id, why: f.rejected });
-      if (f.shadow) { f.shadow.symbol = symbol; f.shadow.barTime = bars[i].t; f.shadow.barEnd = hhmm(endMin); f.shadow.shadow = true; out.shadow.push(f.shadow); }
+      if (f.shadow) { f.shadow.shadow = true; out.shadow.push(f.shadow); }
     });
     return out;
   }
@@ -964,9 +1012,11 @@ var SRCore = (function () {
   }
 
   /**
-   * Strategy metrics from closed trades [{netPct, netPnl?, exitT, holdDays?, alphaPct?}], in exit order.
+   * Strategy metrics from closed trades [{netPct, netPnl?, exitT, dayT?, holdDays?, alphaPct?}], in exit order.
    * Drawdown is on an equity curve that starts at `capital` (rupee results when every trade has one,
    * otherwise percent results compounded). Profit factor is null while there are no losses.
+   * days counts the different trading days the trades were signalled on (dayT, else exitT): trades from
+   * one day share one market move, so they are weaker evidence than the same number spread over many days.
    */
   function metrics(trades, opts) {
     opts = opts || {};
@@ -974,8 +1024,10 @@ var SRCore = (function () {
     var list = (trades || []).filter(function (x) { return num(x.netPct); }).slice().sort(function (a, b) { return (a.exitT || 0) - (b.exitT || 0); });
     var money = list.length > 0 && list.every(function (x) { return num(x.netPnl); });
     var n = list.length, wins = 0, losses = 0, flats = 0, sumW = 0, sumL = 0, gp = 0, gl = 0, sum = 0;
-    var hold = 0, nHold = 0, alpha = 0, nAlpha = 0, eq = cap, peak = cap, maxDD = 0, total = 0;
+    var hold = 0, nHold = 0, alpha = 0, nAlpha = 0, eq = cap, peak = cap, maxDD = 0, total = 0, seen = {}, days = 0;
     list.forEach(function (x) {
+      var dt = num(x.dayT) ? x.dayT : x.exitT;
+      if (num(dt) && !seen[istDay(dt)]) { seen[istDay(dt)] = true; days++; }
       sum += x.netPct;
       if (x.netPct > 0) { wins++; sumW += x.netPct; } else if (x.netPct < 0) { losses++; sumL += x.netPct; } else flats++;
       var v = money ? x.netPnl : x.netPct;
@@ -988,7 +1040,7 @@ var SRCore = (function () {
       if (num(x.alphaPct)) { alpha += x.alphaPct; nAlpha++; }
     });
     return {
-      trades: n, wins: wins, losses: losses, flats: flats,
+      trades: n, days: days, wins: wins, losses: losses, flats: flats,
       winRatePct: n ? round(wins / n * 100, 1) : null,
       avgWinPct: wins ? round(sumW / wins, 2) : null,
       avgLossPct: losses ? round(sumL / losses, 2) : null,
@@ -1004,16 +1056,21 @@ var SRCore = (function () {
 
   /**
    * Live-ready, Rejected or still Paper, from a strategy's metrics.
-   * rules: {minTrades, minPF, maxDrawdownPct}
-   *   LIVE_READY: at least minTrades closed trades, average net result above zero after charges,
-   *               profit factor at least minPF, drawdown within the limit, and beating Nifty 50 over
-   *               the same holding periods (average alpha above zero).
-   *   REJECTED:   at least minTrades and an average net result below zero.
+   * rules: {minTrades, minDays, minPF, maxDrawdownPct}
+   *   Both decisions need at least minTrades closed trades, spread over at least minDays different trading days.
+   *   LIVE_READY: average net result above zero after charges, profit factor at least minPF, drawdown within
+   *               the limit, and beating Nifty 50 over the same holding periods (average alpha above zero).
+   *   REJECTED:   an average net result below zero.
    */
   function graduate(m, rules) {
-    var need = rules.minTrades;
-    if (!m || !(m.trades >= need)) return { status: 'PAPER', reason: 'Needs more data: ' + (m ? m.trades : 0) + ' of ' + need + ' closed paper trades.' };
-    if (m.expectancyPct < 0) return { status: 'REJECTED', reason: 'Loses ' + Math.abs(m.expectancyPct).toFixed(2) + '% per trade on average after charges, over ' + m.trades + ' trades.' };
+    var need = rules.minTrades, needDays = rules.minDays || 0, days = m && num(m.days) ? m.days : 0;
+    if (!m || !(m.trades >= need)) {
+      return { status: 'PAPER', reason: 'Needs more data: ' + (m ? m.trades : 0) + ' of ' + need + ' closed paper trades' + (needDays ? ', on ' + days + ' of ' + needDays + ' different days' : '') + '.' };
+    }
+    if (days < needDays) {
+      return { status: 'PAPER', reason: 'Needs more days: ' + m.trades + ' trades, but on only ' + days + ' of ' + needDays + ' different trading days. Trades on the same day tend to win or lose together.' };
+    }
+    if (m.expectancyPct < 0) return { status: 'REJECTED', reason: 'Loses ' + Math.abs(m.expectancyPct).toFixed(2) + '% per trade on average after charges, over ' + m.trades + ' trades' + (num(m.days) ? ' on ' + m.days + ' days' : '') + '.' };
     var pfOk = m.profitFactor === null ? (m.losses === 0 && m.wins > 0) : m.profitFactor >= rules.minPF;
     var fails = [];
     if (!(m.expectancyPct > 0)) fails.push('average result is not above zero');
@@ -1023,7 +1080,7 @@ var SRCore = (function () {
     if (fails.length) return { status: 'PAPER', reason: 'Not yet: ' + fails.join('; ') + '.' };
     return {
       status: 'LIVE_READY',
-      reason: m.winRatePct + '% win over ' + m.trades + ' trades, ' + (m.expectancyPct >= 0 ? '+' : '−') + Math.abs(m.expectancyPct).toFixed(2) + '% a trade after charges, profit factor ' +
+      reason: m.winRatePct + '% win over ' + m.trades + ' trades' + (num(m.days) ? ' on ' + m.days + ' days' : '') + ', ' + (m.expectancyPct >= 0 ? '+' : '−') + Math.abs(m.expectancyPct).toFixed(2) + '% a trade after charges, profit factor ' +
         (m.profitFactor === null ? 'with no losses' : m.profitFactor) + ', beating Nifty 50 by ' + m.avgAlphaPct.toFixed(2) + '% a trade.',
     };
   }
@@ -1048,6 +1105,7 @@ var SRCore = (function () {
     qualityValue: qualityValue,
     scanDaily: scanDaily,
     scanIntraday: scanIntraday,
+    dayDirection: dayDirection,
     finalize: finalize,
     confidence: confidence,
     positionSize: positionSize,

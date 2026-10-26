@@ -850,14 +850,37 @@ test('evaluation: swing and medium alerts are judged on later daily candles, wit
   eq(sheetRows(sim, 'Checkpoints').length, cps.length, 'checkpoints are written once');
 });
 
+/** A closed paper trade row for the Alerts sheet, `day` days after 1 Sep 2026 (minute `i` that day). */
+const closedRow = (i, pct, day, strategy = 'orb') => ({
+  id: 'A2026-T' + i + '-' + strategy, createdAt: new Date(Date.parse('2026-09-01T10:00:00+05:30') + day * 86400000 + i * 60000), symbol: 'BIG001', horizon: 'INTRADAY', strategy,
+  direction: 'BUY', entryLow: 100, entryHigh: 100.2, stop: 99, target1: 102, regime: 'BULL', status: 'CLOSED', outcome: pct > 0 ? 'TARGET_HIT' : 'STOP_HIT',
+  closedAt: new Date(Date.parse('2026-09-01T14:00:00+05:30') + day * 86400000 + i * 60000), netPct: pct, netPnl: pct * 100, paperQty: 10, alphaPct: pct - 0.1, holdDays: 0.2, track: 'main',
+});
+
+test('graduation: 30 trades on only a few days are not enough, however good they look', () => {
+  const { G, sim, w } = marketWorld();
+  G.AlertBook.ensureHeaders();
+  G.Store.append('Alerts', Array.from({ length: 40 }, (_, i) => closedRow(i, i % 3 === 0 ? -0.5 : 1.2, i % 4))); // four days
+  G.MarketCal._now = at('2026-10-31T10:30:00+05:30');
+  const before = w.telegram.length;
+  G.weeklyReport();
+  const msgs = w.telegram.slice(before).join('\n');
+  ok(!/LIVE-READY/.test(msgs), 'not promoted');
+  ok(/Opening-range breakout<\/b> · Paper · 40\/30 trades, 4\/15 days/.test(msgs), msgs);
+  G.StrategyBook._map = null;
+  eq(G.StrategyBook.load().orb.status, 'PAPER');
+  ok(/only 4 of 15 different trading days/.test(sheetRows(sim, 'Strategies').find((r) => r.id === 'orb').statusReason), 'reason recorded');
+  // Forty losers on four days are not rejected either.
+  G.Store.append('Alerts', Array.from({ length: 40 }, (_, i) => closedRow(100 + i, -0.8, 10 + (i % 4))));
+  G.weeklyReport();
+  G.StrategyBook._map = null;
+  eq(G.StrategyBook.load().orb.status, 'PAPER', 'not rejected on four days');
+});
+
 test('graduation: 30 good paper trades make a strategy Live-ready; a bad run demotes it, with a message each time', () => {
   const { G, sim, w } = marketWorld();
   G.AlertBook.ensureHeaders();
-  const mk = (i, pct) => ({
-    id: 'A20261001-0930-T' + i + '-orb', createdAt: new Date(Date.parse('2026-09-01T10:00:00+05:30') + i * 3600000), symbol: 'BIG001', horizon: 'INTRADAY', strategy: 'orb',
-    direction: 'BUY', entryLow: 100, entryHigh: 100.2, stop: 99, target1: 102, regime: 'BULL', status: 'CLOSED', outcome: pct > 0 ? 'TARGET_HIT' : 'STOP_HIT',
-    closedAt: new Date(Date.parse('2026-09-01T14:00:00+05:30') + i * 3600000), netPct: pct, netPnl: pct * 100, paperQty: 10, alphaPct: pct - 0.1, holdDays: 0.2, track: 'main',
-  });
+  const mk = (i, pct) => closedRow(i, pct, i); // one trade a day
   G.Store.append('Alerts', Array.from({ length: 30 }, (_, i) => mk(i, i % 3 === 0 ? -0.5 : 1.2)));
   G.MarketCal._now = at('2026-10-31T10:30:00+05:30'); // Saturday
   const before = w.telegram.length;
@@ -876,7 +899,7 @@ test('graduation: 30 good paper trades make a strategy Live-ready; a bad run dem
     G.StrategyBook.load().orb, { qty: 5, value: 500, riskAmount: 5 }, { text: 'Today until 15:15' }, { state: 'BULL' }, 'Test');
   ok(/LIVE-READY<\/b> · 67% win, 30 trades/.test(fmt), fmt);
   // Thirty losers in a row: the latest 60 trades now lose money, so it is rejected.
-  G.Store.append('Alerts', Array.from({ length: 30 }, (_, i) => mk(100 + i, -0.8)));
+  G.Store.append('Alerts', Array.from({ length: 30 }, (_, i) => closedRow(100 + i, -0.8, 30 + i)));
   G.MarketCal._now = at('2026-11-07T10:30:00+05:30');
   const b2 = w.telegram.length;
   G.weeklyReport();
@@ -905,19 +928,46 @@ test('readiness report goes out on day 30 (once), and only the latest milestone 
   eq(sim.state.props.get('READINESS_SENT'), '30,60');
 });
 
-test('shadow tracking: in a Bear market an intraday buy is logged silently, judged, and kept out of the record', () => {
+/** Change one Config value in the sheet, as you would by hand. */
+function setConfig(sim, G, key, value) {
+  const sh = sim.ss.getSheetByName('Config'), d = sh.dump(), r = d.findIndex((x) => x[0] === key);
+  if (r < 0) throw new Error('no Config row ' + key);
+  sh.getRange(r + 1, 2).setValues([[value]]);
+  G.Config._cache = null;
+}
+
+test('intraday on a Bear day: buys go out by default, and the brief lists the day\'s rules', () => {
+  const day = '2026-10-26';
+  const { G, sim, w } = marketWorld({ end: day, niftyDown: true, intra: { [TOKENS.TCS]: SC.intraday.orb() } });
+  G.MarketCal._now = at('2026-10-25T21:00:00+05:30');
+  G.loadHistory();
+  eq(G.Market.saved().state, 'BEAR');
+  G.Schedule.install();
+  tickAtDay(G, day, '08:50');
+  const brief = w.telegram[w.telegram.length - 1];
+  ok(/Intraday rules: buys while Nifty 50 is above its open, shorts while it is below; one alert per stock\./.test(brief), brief);
+  const sent0 = w.telegram.length;
+  for (const t of ['09:41', '09:46']) tickAtDay(G, day, t);
+  ok(/BUY TCS/.test(w.telegram.slice(sent0).join('\n')), 'the buy is sent');
+  const a = alertsRows(sim);
+  eq(a.length, 1); eq(a[0].track, 'main'); eq(a[0].regime, 'BEAR');
+});
+
+test('shadow tracking: with "no buys on Bear days" on, an intraday buy is logged silently, judged, and kept out of the record', () => {
   const day = '2026-10-26';
   const { G, sim, w } = marketWorld({ end: day, niftyDown: true, intra: { [TOKENS.TCS]: SC.intraday.orb() }, minute: { [TOKENS.TCS]: minuteDay(day, 101.1, '09:47', 0.02) } });
   G.MarketCal._now = at('2026-10-25T21:00:00+05:30');
   G.loadHistory();
   eq(G.Market.saved().state, 'BEAR');
+  setConfig(sim, G, 'intradayBlockBuysInBear', 'TRUE');
   G.Schedule.install();
   for (const t of ['08:50', '09:41']) tickAtDay(G, day, t);
+  ok(/no buys today \(Bear day, your setting\)/.test(w.telegram[w.telegram.length - 1]), 'brief mentions the switch');
   const sent0 = w.telegram.length;
   tickAtDay(G, day, '09:46');
   eq(w.telegram.length, sent0, 'no message for a blocked buy');
   const a = alertsRows(sim);
-  eq(a.length, 1); eq(a[0].track, 'shadow'); ok(/blocked by the Bear regime/.test(a[0].telegram), a[0].telegram); ok(/-H$/.test(a[0].id), a[0].id);
+  eq(a.length, 1); eq(a[0].track, 'shadow'); ok(/not sent: blocked by your setting: no intraday buys on Bear days, tracked silently/.test(a[0].telegram), a[0].telegram); ok(/-H$/.test(a[0].id), a[0].id);
   tickAtDay(G, day, '09:51');
   eq(alertsRows(sim).length, 1, 'shadows are not repeated either');
   tickAtDay(G, day, '16:00');
@@ -926,12 +976,53 @@ test('shadow tracking: in a Bear market an intraday buy is logged silently, judg
   eq(sheetRows(sim, 'Strategies').find((r) => r.id === 'orb').trades, 0, 'not in the strategy record');
   ok(sheetRows(sim, 'Metrics').some((r) => r.strategy === 'orb' && r.track === 'shadow' && r.trades === 1), 'in the shadow metrics');
   const summary = w.telegram.slice(sent0).join('\n');
-  ok(/1 more signal was blocked by the regime/.test(summary), summary);
+  ok(/1 more signal was blocked by the market filters/.test(summary), summary);
   ok(!/Closed today: 1/.test(summary), 'paper account counts main trades only');
   const before = w.telegram.length;
   G.MarketCal._now = at('2026-10-31T10:30:00+05:30');
   G.weeklyReport();
-  ok(/Regime filter check/.test(w.telegram.slice(before).join('\n')), 'weekly report compares blocked and taken signals');
+  const weekly = w.telegram.slice(before).join('\n');
+  ok(/Filter check/.test(weekly) && /Intraday \(by your Bear\/Bull switch\): blocked 1 averaged \+/.test(weekly), weekly);
+});
+
+test('trading with the day: a buy while Nifty 50 falls from its open is held back; with Nifty rising it goes out', () => {
+  const day = '2026-10-26';
+  const run = (dir) => {
+    const env = marketWorld({ end: day, intra: { [TOKENS.TCS]: SC.intraday.orb(), '99926000': SC.niftyIntraday(dir) } });
+    const { G } = env;
+    G.MarketCal._now = at('2026-10-25T21:00:00+05:30');
+    G.loadHistory();
+    G.Schedule.install();
+    for (const t of ['08:50', '09:41', '09:46']) tickAtDay(G, day, t);
+    return env;
+  };
+  const down = run(-1);
+  let a = alertsRows(down.sim);
+  eq(a.length, 1); eq(a[0].track, 'shadow');
+  ok(/not sent: against the day: Nifty 50 is down 0\.24% since the open, tracked silently/.test(a[0].telegram), a[0].telegram);
+  ok(down.w.candleCalls.some((c) => c.interval === 'FIVE_MINUTE' && c.symboltoken === '99926000'), 'Nifty 5-minute bars fetched');
+  const up = run(1);
+  a = alertsRows(up.sim);
+  eq(a.length, 1); eq(a[0].track, 'main'); eq(a[0].telegram, 'sent');
+  ok(/Nifty 50 is up 0\.24% since the open/.test(a[0].reasons), a[0].reasons);
+  ok(/Nifty 50 is up 0\.24% since the open/.test(up.w.telegram.join('\n')), 'the reason is in the message');
+});
+
+test('one intraday alert per stock per day: the strongest signal wins, later ones are dropped', () => {
+  const { G, sim } = marketWorld();
+  const sig = (sym, strategy, direction, confidence) => ({ symbol: sym, strategy, direction, confidence });
+  const t0 = at('2026-10-26T10:01:00+05:30');
+  const first = G.IntraSeen.filter('2026-10-26', [sig('TCS', 'orb', 'BUY', 60), sig('TCS', 'vwap', 'BUY', 72), sig('INFY', 'orb', 'BUY', 55)], t0, '');
+  eq(first.map((s) => s.symbol + ':' + s.strategy).join(), 'TCS:vwap,INFY:orb');
+  eq(G.IntraSeen.filter('2026-10-26', [sig('TCS', 'ema-cross', 'SHORT', 90)], t0 + 3 * 3600000, '').length, 0, 'not even later in the day, nor the other way');
+  eq(G.IntraSeen.filter('2026-10-26', [sig('TCS', 'ema-cross', 'SHORT', 90)], t0, 'S|').length, 1, 'shadows are counted separately');
+  eq(G.IntraSeen.filter('2026-10-27', [sig('TCS', 'orb', 'BUY', 60)], t0 + 86400000, '').length, 1, 'a new day starts fresh');
+  setConfig(sim, G, 'intradayOneAlertPerStock', 'FALSE');
+  sim.state.props.delete('INTRA_SEEN');
+  const both = G.IntraSeen.filter('2026-10-26', [sig('TCS', 'orb', 'BUY', 60), sig('TCS', 'vwap', 'BUY', 72)], t0, '');
+  eq(both.length, 2, 'switch off: one per strategy');
+  eq(G.IntraSeen.filter('2026-10-26', [sig('TCS', 'orb', 'SHORT', 60)], t0 + 30 * 60000, '').length, 0, 'inside the cooldown');
+  eq(G.IntraSeen.filter('2026-10-26', [sig('TCS', 'orb', 'SHORT', 60)], t0 + 61 * 60000, '').length, 1, 'after the cooldown');
 });
 
 test('menu: update paper results now', () => {
@@ -1020,10 +1111,13 @@ test('web app: charts — daily from Drive history, 5-minute for an intraday ale
 test('web app: settings saved from the app reach the Config and Strategies sheets, with checks', () => {
   const { G, sim, w } = dayAfter();
   const token = sim.state.props.get('APP_TOKEN');
-  const r = post(G, { a: 'settings', t: token, settings: { riskPct: 1.5, realCapital: 250000, watchlist: ['tcs', 'SBIN'], paperAlerts: false }, strategies: { off: ['macd'], overrides: { orb: 'live_ready' } } });
+  eq(post(G, { a: 'bundle', t: token }).data.settings.intradayBlockBuysInBear, false, 'both directions by default');
+  const r = post(G, { a: 'settings', t: token, settings: { riskPct: 1.5, realCapital: 250000, watchlist: ['tcs', 'SBIN'], paperAlerts: false, intradayBlockBuysInBear: true, intradayFollowNifty: false }, strategies: { off: ['macd'], overrides: { orb: 'live_ready' } } });
   eq(r.ok, true, r.error);
   G.Config._cache = null; G.StrategyBook._map = null;
   eq(G.Config.get('riskPct'), 1.5); eq(G.Config.get('realCapital'), 250000); eq(G.Config.get('paperAlerts'), false);
+  eq(G.Config.get('intradayBlockBuysInBear'), true); eq(G.Config.get('intradayFollowNifty'), false); eq(G.Config.get('intradayOneAlertPerStock'), true, 'untouched');
+  eq(r.data.intradayBlockBuysInBear, true); eq(r.data.intradayFollowNifty, false);
   eq(G.Config.get('watchlist'), 'TCS,SBIN');
   const book = G.StrategyBook.load();
   eq(book.macd.enabled, false); eq(book.orb.status, 'LIVE_READY', 'override');

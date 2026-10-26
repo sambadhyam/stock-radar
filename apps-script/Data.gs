@@ -6,7 +6,7 @@
  * This file holds no keys. Keys are saved privately with  Stock Radar → 2. Set up keys.
  */
 
-var SR_VERSION = '0.5.0';
+var SR_VERSION = '0.5.1';
 var IST = 'Asia/Kolkata';
 
 /* =============================== Settings =============================== */
@@ -33,12 +33,17 @@ var CONFIG_DEFAULTS = [
   ['staleQuoteSeconds', 180, 'In market hours, a live quote older than this many seconds is stale'],
   ['crossCheckPct', 2, 'Flag when two data sources disagree on a price by more than this percent'],
   ['alertCooldownMinutes', 60, 'Shortest gap between alerts for the same stock and strategy'],
+  ['intradayOneAlertPerStock', true, 'At most one intraday alert per stock per day (the strongest signal wins)'],
+  ['intradayFollowNifty', true, 'Intraday: buy only while Nifty 50 is above today\'s opening price, short only while it is below (blocked signals are tracked silently)'],
+  ['intradayBlockBuysInBear', false, 'Intraday: no buy signals on days the market regime is Bear (blocked signals are tracked silently)'],
+  ['intradayBlockShortsInBull', false, 'Intraday: no short signals on days the market regime is Bull (blocked signals are tracked silently)'],
   ['graduationMinTrades', 30, 'Closed paper trades needed before a strategy can become Live-ready'],
+  ['graduationMinDays', 15, 'Different trading days those trades must come from before a strategy can become Live-ready or Rejected (trades on one day move together)'],
   ['graduationMinPF', 1.3, 'Profit factor needed for Live-ready'],
   ['graduationMaxDrawdownPct', 15, 'Largest paper drawdown allowed for Live-ready, in percent'],
   ['graduationWindowTrades', 60, 'A strategy is judged on its latest this many closed paper trades (all of them until it has this many)'],
   ['exitCheckDays', 20, 'Trading days after an exit warning at which it is judged (right if the price fell)'],
-  ['shadowTracking', true, 'Also paper-track, silently, the signals blocked only by the market regime, to test the regime filter'],
+  ['shadowTracking', true, 'Also paper-track, silently, the signals blocked only by the market filters (regime, your intraday switches, the day\'s direction), to test those filters'],
   ['useInstrumentMaster', false, 'Use Angel One\'s big instrument file for stock tokens (slow; symbol search is used when FALSE)'],
   ['intradayMaxSymbols', 60, 'Most stocks the intraday engine checks every 5 minutes'],
   ['maxTelegramAlertsPerRun', 5, 'Most alert messages sent from one scan; the rest are listed in one extra message'],

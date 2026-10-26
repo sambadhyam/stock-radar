@@ -146,7 +146,7 @@ var AppApi = {
         .map(function (r) { return r.outcome === 'TARGET_HIT' ? 'W' : r.outcome === 'STOP_HIT' ? 'L' : 'X'; }).join('').slice(-30);
       return {
         id: st.id, name: st.name, horizon: self.lower(st.horizon), status: self.statusKey(b.status), enabled: b.enabled !== false,
-        override: b.override || '', trades: mine.length, outcomes: outcomes, win: m.winRatePct, avg: m.expectancyPct, pf: m.profitFactor,
+        override: b.override || '', trades: mine.length, days: m.days, outcomes: outcomes, win: m.winRatePct, avg: m.expectancyPct, pf: m.profitFactor,
         vsNifty: m.avgAlphaPct, paperDd: m.maxDrawdownPct === null ? null : -m.maxDrawdownPct, backtest: null,
         verdict: SRCore.graduate(m, rules).reason,
       };
@@ -186,7 +186,7 @@ var AppApi = {
       paper: this.paper(rows, trades, cap, today), scan: this.scan(), fundamentals: this.fundamentals(),
       reports: this.reports(), paperStart: Secrets.props().getProperty('PAPER_START') || '',
       readinessSent: (Secrets.props().getProperty('READINESS_SENT') || '').split(',').filter(Boolean).map(Number),
-      settings: this.settings(book),
+      settings: this.settings(book), rules: rules,
     };
   },
 
@@ -272,14 +272,18 @@ var AppApi = {
     });
   },
 
+  /** On/off settings the app may change (all TRUE/FALSE in the Config sheet). */
+  SWITCHES: ['telegram', 'emailDigest', 'paperAlerts', 'intradayFollowNifty', 'intradayBlockBuysInBear', 'intradayBlockShortsInBull', 'intradayOneAlertPerStock'],
+
   settings: function (book) {
-    var c = Config.all(), off = [];
+    var c = Config.all(), off = [], out;
     Object.keys(book).forEach(function (id) { if (!book[id].enabled) off.push(id); });
-    return {
+    out = {
       realCapital: c.realCapital, paperCapital: c.paperCapital, riskPct: c.riskPct, maxPerStockPct: c.maxPerStockPct,
-      watchlist: Config.symbols('watchlist'), telegram: c.telegram !== false, emailDigest: c.emailDigest !== false, paperAlerts: c.paperAlerts !== false,
-      strategiesOff: off,
+      watchlist: Config.symbols('watchlist'), strategiesOff: off,
     };
+    this.SWITCHES.forEach(function (k) { out[k] = c[k] === true; });
+    return out;
   },
 
   /** Daily candles from the Drive history, or 5-minute candles of the alert's day for intraday alerts. */
@@ -340,7 +344,7 @@ var AppApi = {
         if (!(isFinite(v) && v >= nums[k][0] && v <= nums[k][1])) throw new Error(k + ' is out of range');
         write[k] = String(v);
       });
-      ['telegram', 'emailDigest', 'paperAlerts'].forEach(function (k) { if (s[k] !== undefined) write[k] = s[k] ? 'TRUE' : 'FALSE'; });
+      this.SWITCHES.forEach(function (k) { if (s[k] !== undefined) write[k] = s[k] === true ? 'TRUE' : 'FALSE'; });
       if (s.watchlist !== undefined) {
         var list = (s.watchlist || []).map(function (x) { return String(x).trim().toUpperCase(); }).filter(Boolean);
         if (list.length > 10 || list.some(function (x) { return !/^[A-Z0-9&-]{1,20}$/.test(x); })) throw new Error('The watchlist takes up to 10 NSE symbols');

@@ -66,9 +66,9 @@ var Tables = {
 var Review = {
   EVAL_COLS: ['status', 'triggeredAt', 'closedAt', 'outcome', 'outcomePct', 'netPct', 'fillPrice', 'exitPrice', 'paperQty', 'grossPnl', 'charges', 'netPnl', 'niftyPct', 'alphaPct', 'holdDays', 'evaluatedAt'],
   PAPER_EXTRA: ['direction', 'regime', 'track', 'markPrice', 'unrealisedPnl'],
-  STRAT_EXTRA: ['expectancyPct', 'avgWinPct', 'avgLossPct', 'avgHoldDays', 'openTrades', 'statusReason', 'note'],
+  STRAT_EXTRA: ['expectancyPct', 'avgWinPct', 'avgLossPct', 'avgHoldDays', 'openTrades', 'statusReason', 'note', 'tradeDays'],
   CHECK_EXTRA: ['strategy', 'horizon'],
-  METRIC_HEADERS: ['strategy', 'name', 'horizon', 'track', 'regime', 'trades', 'wins', 'losses', 'winRatePct', 'avgWinPct', 'avgLossPct', 'expectancyPct', 'profitFactor', 'maxDrawdownPct', 'avgHoldDays', 'avgAlphaPct', 'totalNetPnl', 'note', 'updatedAt'],
+  METRIC_HEADERS: ['strategy', 'name', 'horizon', 'track', 'regime', 'trades', 'wins', 'losses', 'winRatePct', 'avgWinPct', 'avgLossPct', 'expectancyPct', 'profitFactor', 'maxDrawdownPct', 'avgHoldDays', 'avgAlphaPct', 'totalNetPnl', 'note', 'updatedAt', 'days'],
   CHECKPOINTS: [['1M', 1], ['3M', 3], ['6M', 6], ['12M', 12]],
 
   rates: function () {
@@ -364,16 +364,27 @@ var Review = {
   closedTrades: function (rows) {
     var self = this;
     return rows.filter(function (r) { return r.status === 'CLOSED' && REVIEW_OUTCOMES.indexOf(r.outcome) >= 0 && self.num(r.netPct); }).map(function (r) {
+      var track = r.track || 'main';
       return {
-        strategy: r.strategy, horizon: r.horizon, regime: r.regime || 'UNKNOWN', track: r.track || 'main', symbol: r.symbol,
+        strategy: r.strategy, horizon: r.horizon, regime: r.regime || 'UNKNOWN', track: track, symbol: r.symbol,
         netPct: r.netPct, netPnl: Number(r.paperQty) > 0 && self.num(r.netPnl) ? r.netPnl : null,
-        exitT: self.ms(r.closedAt), holdDays: self.num(r.holdDays) ? r.holdDays : null, alphaPct: self.num(r.alphaPct) ? r.alphaPct : null,
+        exitT: self.ms(r.closedAt), dayT: self.ms(r.createdAt) || null, holdDays: self.num(r.holdDays) ? r.holdDays : null, alphaPct: self.num(r.alphaPct) ? r.alphaPct : null,
+        blockedBy: track === 'shadow' ? self.blockKind(r.telegram) : '',
       };
     });
   },
 
+  /** Which market filter held a shadow signal back, from its note: 'day', 'switch' or 'regime'. */
+  blockKind: function (note) {
+    var s = String(note || '');
+    return /against the day/.test(s) ? 'day' : /your setting/.test(s) ? 'switch' : 'regime';
+  },
+
   rules: function () {
-    return { minTrades: Number(Config.get('graduationMinTrades')) || 30, minPF: Number(Config.get('graduationMinPF')) || 1.3, maxDrawdownPct: Number(Config.get('graduationMaxDrawdownPct')) || 15 };
+    return {
+      minTrades: Number(Config.get('graduationMinTrades')) || 30, minDays: Number(Config.get('graduationMinDays')) || 0,
+      minPF: Number(Config.get('graduationMinPF')) || 1.3, maxDrawdownPct: Number(Config.get('graduationMaxDrawdownPct')) || 15,
+    };
   },
 
   /** The latest closed main trades a strategy is judged on (all of them until there are enough). */
@@ -395,7 +406,7 @@ var Review = {
           if (rg !== 'ALL' && !list.length) return;
           var m = SRCore.metrics(list, { capital: cap });
           var row = { strategy: st.id, name: st.name, horizon: st.horizon, track: track, regime: rg, updatedAt: now,
-            note: m.trades < rules.minTrades ? 'Insufficient data (' + m.trades + ' of ' + rules.minTrades + ')' : '' };
+            note: m.trades < rules.minTrades ? 'Insufficient data (' + m.trades + ' of ' + rules.minTrades + ')' : m.days < rules.minDays ? 'Insufficient data (trades on ' + m.days + ' of ' + rules.minDays + ' days)' : '' };
           Object.keys(m).forEach(function (k) { row[k] = m[k] === null ? '' : m[k]; });
           metricRows.push(row);
         });
@@ -417,10 +428,10 @@ var Review = {
       o.trades = m.trades; o.wins = m.wins; o.losses = m.losses; o.flats = m.flats; o.winRatePct = b(m.winRatePct);
       o.avgNetPct = b(m.expectancyPct); o.expectancyPct = b(m.expectancyPct); o.profitFactor = b(m.profitFactor);
       o.maxDrawdownPct = b(m.maxDrawdownPct); o.alphaPct = b(m.avgAlphaPct); o.avgWinPct = b(m.avgWinPct); o.avgLossPct = b(m.avgLossPct);
-      o.avgHoldDays = b(m.avgHoldDays); o.openTrades = open[o.id] || 0; o.updatedAt = now;
+      o.avgHoldDays = b(m.avgHoldDays); o.openTrades = open[o.id] || 0; o.updatedAt = now; o.tradeDays = m.days;
       o.note = g.status === String(o.status).toUpperCase() ? g.reason : 'Next weekly review: ' + g.status.replace('_', '-') + '. ' + g.reason;
     });
-    Tables.writeCols(t, ['trades', 'wins', 'losses', 'flats', 'winRatePct', 'avgNetPct', 'expectancyPct', 'profitFactor', 'maxDrawdownPct', 'alphaPct', 'avgWinPct', 'avgLossPct', 'avgHoldDays', 'openTrades', 'updatedAt', 'note'], 0);
+    Tables.writeCols(t, ['trades', 'wins', 'losses', 'flats', 'winRatePct', 'avgNetPct', 'expectancyPct', 'profitFactor', 'maxDrawdownPct', 'alphaPct', 'avgWinPct', 'avgLossPct', 'avgHoldDays', 'openTrades', 'updatedAt', 'note', 'tradeDays'], 0);
     StrategyBook._map = null;
 
     var summary = this.paperSummary(rows, trades);
@@ -491,8 +502,8 @@ var Review = {
       if (m.maxDrawdownPct !== null) bits.push('DD ' + m.maxDrawdownPct.toFixed(1) + '%');
       if (m.avgAlphaPct !== null) bits.push('vs Nifty ' + Fmt.pct(m.avgAlphaPct));
     }
-    var icon = current === 'LIVE_READY' ? '✅' : current === 'REJECTED' ? '⛔' : '🧪';
-    return [icon + ' <b>' + Notify.esc(st.name) + '</b> · ' + this.statusName(current) + ' · ' + m.trades + '/' + this.rules().minTrades,
+    var icon = current === 'LIVE_READY' ? '✅' : current === 'REJECTED' ? '⛔' : '🧪', rules = this.rules();
+    return [icon + ' <b>' + Notify.esc(st.name) + '</b> · ' + this.statusName(current) + ' · ' + m.trades + '/' + rules.minTrades + ' trades' + (rules.minDays ? ', ' + m.days + '/' + rules.minDays + ' days' : ''),
       '   ' + (bits.length ? bits.join(' · ') : 'no closed paper trades yet')];
   },
 
@@ -514,7 +525,7 @@ var Review = {
     L.push('<b>Paper trading</b>: ' + week.length + ' trade' + (week.length === 1 ? '' : 's') + ' closed this week, ' + wWins + ' won, net ' + Fmt.money(this.round(wNet), 0) + ' after charges.');
     if (s) L.push('Since start: ' + Fmt.money(s.netPnl, 0) + ' (' + Fmt.pct(s.returnPct) + ' of ' + Fmt.money(cap, 0) + '), ' + s.open + ' open.');
     L.push(Market.line(Market.saved()));
-    L.push('', '<b>Strategies</b> (closed paper trades / ' + rules.minTrades + ' needed)');
+    L.push('', '<b>Strategies</b> (closed paper trades / ' + rules.minTrades + ' needed' + (rules.minDays ? ', on ' + rules.minDays + '+ different days' : '') + ')');
     var book = StrategyBook.load();
     SRCore.STRATEGIES.forEach(function (st) {
       var m = SRCore.metrics(self.window(trades.filter(function (x) { return x.strategy === st.id && x.track === 'main'; })), { capital: cap });
@@ -561,18 +572,29 @@ var Review = {
     return changes;
   },
 
-  /** Did the regime filter help? Signals it blocked (tracked silently) against those it let through. */
+  /**
+   * Did the market filters help? Signals they blocked (tracked silently) against those they let through,
+   * per horizon, and for intraday per filter: the regime, your Bear/Bull switches and the day's direction.
+   */
   filterCheckLines: function (trades, cap) {
     var L = [], shadow = trades.filter(function (x) { return x.track === 'shadow'; });
     if (!shadow.length) return L;
-    L.push('', '<b>Regime filter check</b> (signals the regime blocked, paper-tracked silently)');
+    var names = { regime: 'by the regime', switch: 'by your Bear/Bull switch', day: 'by the day\'s direction' };
+    var line = function (label, sh, mn) {
+      var a = SRCore.metrics(sh, { capital: cap }), b = SRCore.metrics(mn, { capital: cap });
+      return label + ': blocked ' + a.trades + ' averaged ' + Fmt.pct(a.expectancyPct) + ' (win ' + a.winRatePct + '%)' +
+        (b.trades ? ' vs taken ' + b.trades + ' at ' + Fmt.pct(b.expectancyPct) + ' (win ' + b.winRatePct + '%)' : '');
+    };
+    L.push('', '<b>Filter check</b> (signals the market filters blocked, paper-tracked silently)');
     ['INTRADAY', 'SWING', 'MEDIUM', 'LONG'].forEach(function (h) {
       var sh = shadow.filter(function (x) { return x.horizon === h; });
       if (!sh.length) return;
       var mn = trades.filter(function (x) { return x.track === 'main' && x.horizon === h; });
-      var a = SRCore.metrics(sh, { capital: cap }), b = SRCore.metrics(mn, { capital: cap });
-      L.push((AlertBook.HORIZON_NAMES[h] || h) + ': blocked ' + a.trades + ' averaged ' + Fmt.pct(a.expectancyPct) + ' (win ' + a.winRatePct + '%)' +
-        (b.trades ? ' vs taken ' + b.trades + ' at ' + Fmt.pct(b.expectancyPct) + ' (win ' + b.winRatePct + '%)' : ''));
+      var kinds = {};
+      sh.forEach(function (x) { kinds[x.blockedBy || 'regime'] = true; });
+      var ks = Object.keys(kinds);
+      if (ks.length === 1) { L.push(line((AlertBook.HORIZON_NAMES[h] || h) + ' (' + names[ks[0]] + ')', sh, mn)); return; }
+      ks.forEach(function (k) { L.push(line((AlertBook.HORIZON_NAMES[h] || h) + ' ' + names[k], sh.filter(function (x) { return (x.blockedBy || 'regime') === k; }), mn)); });
     });
     return L;
   },
@@ -598,7 +620,7 @@ var Review = {
     SRCore.STRATEGIES.forEach(function (st) {
       var m = SRCore.metrics(self.window(trades.filter(function (x) { return x.strategy === st.id && x.track === 'main'; })), { capital: cap });
       var g = SRCore.graduate(m, rules);
-      var key = g.status === 'PAPER' && m.trades < rules.minTrades ? 'MORE' : g.status;
+      var key = g.status === 'PAPER' && (m.trades < rules.minTrades || m.days < rules.minDays) ? 'MORE' : g.status;
       groups[key].push({ st: st, m: m, g: g });
     });
     var show = function (title, list) {
@@ -611,7 +633,7 @@ var Review = {
     show('Needs more data', groups.MORE);
     show('Paper: enough trades, not good enough yet', groups.PAPER);
     show('Rejected', groups.REJECTED);
-    L.push('Live-ready needs ' + rules.minTrades + '+ closed trades, a positive average after charges, profit factor ≥ ' + rules.minPF + ', drawdown ≤ ' + rules.maxDrawdownPct + '% and beating Nifty 50 over the same holding periods.');
+    L.push('Live-ready needs ' + rules.minTrades + '+ closed trades' + (rules.minDays ? ' on ' + rules.minDays + '+ different days' : '') + ', a positive average after charges, profit factor ≥ ' + rules.minPF + ', drawdown ≤ ' + rules.maxDrawdownPct + '% and beating Nifty 50 over the same holding periods.');
     L.push('Performance screen: https://sambadhyam.github.io/stock-radar/#/results (shows live numbers once the app is connected in Phase 4).');
     var text = L.join('\n');
     Notify.safeTelegram(text);

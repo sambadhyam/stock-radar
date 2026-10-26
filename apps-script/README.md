@@ -158,7 +158,9 @@ The entry works like a limit order inside the alert's entry range, at the price 
 
 A strategy becomes **Live-ready** after at least 30 closed paper trades, using its latest 60. It also needs a positive average result after charges, a profit factor of 1.3 or more, a drawdown of 15% or less, and to beat Nifty 50 over the same holding periods. It is **Rejected** if its average result after charges is negative after 30 trades. A rejected strategy keeps paper-trading silently and can recover. You can set any status by hand in the **override** column of the Strategies sheet.
 
-**Signals blocked only by the market regime** (for example, swing buys in a Bear market) are logged with track "shadow" and judged the same way, without any message. They never count towards a strategy's record. The weekly report compares them with the signals that were taken, to show whether the regime filter helps. Switch this off with `shadowTracking` in Config.
+**Signals blocked only by the market filters** (for example, swing buys in a Bear market, or an intraday buy while Nifty 50 is below its open) are logged with track "shadow" and judged the same way, without any message. They never count towards a strategy's record. The weekly report's **Filter check** compares them with the signals that were taken, separately for the regime, your Bear/Bull switches and the day's direction, to show whether each filter helps. Switch this off with `shadowTracking` in Config.
+
+**Live-ready or Rejected** needs at least 30 closed paper trades (`graduationMinTrades`) spread over at least 15 different trading days (`graduationMinDays`). Trades from the same day share one market move, so 38 shorts on one rebound day count as one piece of evidence, not 38.
 
 **Stock Radar → Update paper results now** runs the judging straight away outside market hours.
 
@@ -175,7 +177,16 @@ Every threshold the strategies use is a row in **Config** (keys such as `orb.vol
 | Medium (1–6 months) | Trend template, Relative strength leaders, Near 52-week high | Nifty 200 | After the close |
 | Long (12+ months) | Quality-value score (needs the Fundamentals sheet, Phase 5), Holding guard (exit warnings for stocks in the Holdings sheet) | Nifty 500 + ETFs | After the close |
 
-Every signal must pass: reward-to-risk of at least 1.5 (intraday) or 2 (others), an average traded value of at least ₹10 crore a day, a stop no further than the horizon's limit, and a market regime the strategy is allowed to trade in. Swing and medium buys need a Bull or Neutral regime; intraday buys are allowed in Bull, Neutral and High-volatility, intraday shorts in Bear, Neutral and High-volatility. No signals go out while the price history is missing or stale.
+Every signal must pass: reward-to-risk of at least 1.5 (intraday) or 2 (others), an average traded value of at least ₹10 crore a day, a stop no further than the horizon's limit, and a market regime the strategy is allowed to trade in. Swing and medium buys need a Bull or Neutral regime. No signals go out while the price history is missing or stale.
+
+**Intraday rules** (each is a switch in the app's Settings → Intraday signals, and a row in Config):
+
+| Config key | Default | What it does |
+|---|---|---|
+| `intradayFollowNifty` | TRUE | Buy only while Nifty 50 is above today's opening price; short only while it is below. Nifty's own 5-minute bars are fetched with the stocks. |
+| `intradayBlockBuysInBear` | FALSE | No intraday buys on Bear-regime days. Off means buy and short signals in every regime. |
+| `intradayBlockShortsInBull` | FALSE | No intraday shorts on Bull-regime days. |
+| `intradayOneAlertPerStock` | TRUE | At most one intraday alert per stock per day; when several strategies fire together, the strongest wins. |
 
 ---
 
@@ -229,6 +240,12 @@ Send me a screenshot of the results box (or the Checks sheet) when you're done.
 **Optional: drop permissions granted before.** Phase 1 was allowed to use all your spreadsheets. To remove that older permission: open [myaccount.google.com/connections](https://myaccount.google.com/connections) → **Stock Radar Engine** → delete the connection. Then in the sheet run any Stock Radar menu item and allow again (only the list above is asked for), and run **5. Start daily schedule** once more.
 
 **"Google Drive files" check fails.** If it says the Drive API is not switched on: in Apps Script tap **+** next to **Services** → **Drive API** → **Add**, then run the check again. If it says the permission is missing: paste the latest `appsscript.json`, then run **6. Load price history** and allow.
+
+## Update 0.5.1: intraday fixes (after Monday 26 October)
+
+Paste six files (every file except Setup; open each link, select all, copy; then in Apps Script select all in the matching file, paste, save):
+[Core.gs](Core.gs) → `Core`, [Signals.gs](Signals.gs) → `Signals`, [Review.gs](Review.gs) → `Review`, [Engine.gs](Engine.gs) → `Engine`, [Api.gs](Api.gs) → `Api`, [Data.gs](Data.gs) → `Data`.
+Then publish the web app again: **Deploy → Manage deployments → ✏️ → Version: New version → Deploy**.
 
 ## Updating later
 
