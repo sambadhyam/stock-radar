@@ -81,7 +81,11 @@ var Jobs = {
     var lock = null;
     if (opts.lock) {
       lock = LockService.getScriptLock();
-      if (!lock.tryLock(opts.wait || 3000)) { console.log(name + ' skipped: another run is still working'); return null; }
+      if (!lock.tryLock(opts.wait || 3000)) { this.busy = true; console.log(name + ' skipped: another run is still working'); return null; }
+      this.busy = false;
+      this.mark(name);
+      // Settings saved in the app while the engine was busy are written first, while this run holds the lock.
+      if (typeof PendingSettings !== 'undefined') { try { PendingSettings.applyNow(); } catch (e) { ErrorLog.add('pendingSettings', e); } }
     }
     var t0 = Date.now();
     try {
@@ -93,9 +97,16 @@ var Jobs = {
       if (opts.rethrow) throw err;
       return null;
     } finally {
-      if (lock) { try { lock.releaseLock(); } catch (e) { /* already released */ } }
+      if (lock) { this.unmark(); try { lock.releaseLock(); } catch (e) { /* already released */ } }
     }
   },
+
+  /** True when the last locked run was skipped because another job held the engine (not a failure). */
+  busy: false,
+  /** Which job holds the engine, for "busy with …" (kept in the cache, which costs no quota). */
+  mark: function (name) { try { CacheService.getScriptCache().put('JOB_RUNNING', JSON.stringify({ name: name, at: Date.now() }), 900); } catch (e) { /* optional */ } },
+  unmark: function () { try { CacheService.getScriptCache().remove('JOB_RUNNING'); } catch (e) { /* optional */ } },
+  running: function () { try { return JSON.parse(CacheService.getScriptCache().get('JOB_RUNNING') || 'null'); } catch (e) { return null; } },
 
   finish: function (name, ok, ms, err) {
     var p = Secrets.props(), key = 'JOB_' + name, prev = {};

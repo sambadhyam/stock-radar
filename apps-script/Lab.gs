@@ -659,6 +659,7 @@ function continueBacktest() {
   Backtest.addRun(started, Date.now() - t0);
   var j = Backtest.job();
   if (!j) return;
+  if (r === null && Jobs.busy) { Backtest.schedule(2 * 60000); return; } // another job held the engine: not a failure
   if (r === null) {
     j.fails = (j.fails || 0) + 1;
     if (j.fails >= 4) {

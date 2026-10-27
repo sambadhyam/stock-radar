@@ -18,6 +18,14 @@ const LABELS = {
   backtestYears: 'settings.btYears', intradayHistoryDays: 'settings.btDays', backtestMinutesPerDay: 'settings.btMins', aiSummaries: 'settings.ai',
 };
 
+/** The engine job that was busy when settings were saved, in words. */
+export function busyJob(busy) {
+  const name = busy && busy.name;
+  const key = { tick: 'market', intradayScan: 'market', historyUpdate: 'eod', evaluateIntraday: 'eod', evaluateDaily: 'eod', endOfDayScan: 'eod', endOfDay: 'eod',
+    backtest: 'backtest', history: 'history', valueHoldings: 'holdings', weekly: 'weekly', loadSymbols: 'symbols', kickoff: 'market', settings: 'settings' }[name];
+  return t('busy.' + (key || 'other'));
+}
+
 /** Settings the engine's answer does not confirm: it is running older code that does not know them. */
 function notKept(patch, res) {
   if (!res || typeof res !== 'object') return [];
@@ -168,6 +176,7 @@ export function render({ data, rerender }) {
       const res = await api.saveSettings(patch, { off: [...off] });
       const lost = notKept(patch, res);
       if (lost.length) toast(t('settings.notKept', { list: lost.map((k) => t(LABELS[k] || k)).join(', ') }), 10000);
+      else if (res && res.pending) toast(t('settings.pending', { job: busyJob(res.busy) }), 8000);
       else toast(t('settings.savedEngine') + (watchChanged ? '. ' + t('settings.watchLater') : ''));
       refresh();
     } catch (e) { toast(t('settings.saveFailed', { why: e.message })); }

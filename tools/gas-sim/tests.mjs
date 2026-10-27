@@ -1149,6 +1149,57 @@ test('web app: settings saved from the app reach the Config and Strategies sheet
   eq(post(G, { a: 'unknown', t: token }).ok, false);
 });
 
+test('web app: settings saved while the engine is busy wait, show as saved, and are written within minutes', () => {
+  const { G, sim } = dayAfter();
+  const token = sim.state.props.get('APP_TOKEN');
+  const cfg = (k) => { G.Config._cache = null; return G.Config.get(k); };
+  sim.state.lockBusy = true;
+  sim.state.cache.set('JOB_RUNNING', JSON.stringify({ name: 'tick', at: Date.now() }));
+  const r = post(G, { a: 'settings', t: token, settings: { aiSummaries: true, riskPct: 1.5 }, strategies: { off: ['macd'] } });
+  eq(r.ok, true, r.error);
+  eq(r.data.pending, true); eq(r.data.aiSummaries, true); eq(r.data.riskPct, 1.5); eq(r.data.busy.name, 'tick', 'says which job is busy');
+  eq(cfg('aiSummaries'), false, 'not written yet');
+  ok(sim.state.triggers.some((t) => t.handler === 'applyPendingSettings'), 'a follow-up in a minute');
+  const b = post(G, { a: 'bundle', t: token }).data;
+  ok(b.settings.aiSummaries === true && b.settings.pending === true && b.settings.strategiesOff.includes('macd'), 'the app sees the new values: ' + JSON.stringify(b.settings));
+  eq(post(G, { a: 'settings', t: token, settings: { riskPct: 99 } }).ok, false, 'checks still apply while busy');
+  // Still busy a minute later: tries again.
+  G.applyPendingSettings();
+  eq(cfg('aiSummaries'), false);
+  eq(sim.state.triggers.filter((t) => t.handler === 'applyPendingSettings').length, 1, 'one follow-up at a time');
+  // Free again: the follow-up writes them.
+  sim.state.lockBusy = false; sim.state.cache.delete('JOB_RUNNING');
+  G.applyPendingSettings();
+  eq(cfg('aiSummaries'), true); eq(cfg('riskPct'), 1.5);
+  G.StrategyBook._map = null;
+  eq(G.StrategyBook.load().macd.enabled, false, 'strategy switched off');
+  eq(sim.state.props.get('PENDING_SETTINGS'), undefined, 'nothing left waiting');
+  eq(post(G, { a: 'bundle', t: token }).data.settings.pending, undefined);
+  // Any job that takes the lock writes waiting settings first.
+  sim.state.lockBusy = true;
+  post(G, { a: 'settings', t: token, settings: { aiSummaries: false } });
+  sim.state.lockBusy = false;
+  G.Jobs.run('someJob', () => true, { lock: true });
+  eq(cfg('aiSummaries'), false, 'written by the next locked job');
+  // A later save while free also writes anything older first, and the newer value wins.
+  sim.state.lockBusy = true;
+  post(G, { a: 'settings', t: token, settings: { riskPct: 2, telegram: false } });
+  sim.state.lockBusy = false;
+  post(G, { a: 'settings', t: token, settings: { riskPct: 1.2 } });
+  eq(cfg('riskPct'), 1.2); eq(cfg('telegram'), false);
+});
+
+test('backtest: a step skipped because the engine is busy is not a failure', () => {
+  const { G, sim } = labWorld();
+  G.Backtest.start('menu');
+  sim.state.lockBusy = true;
+  for (let i = 0; i < 5; i++) G.continueBacktest();
+  const j = G.Backtest.job();
+  ok(j.stage !== 'failed' && !(j.fails > 0), JSON.stringify(j));
+  ok(sim.state.triggers.some((t) => t.handler === 'continueBacktest'), 'tries again');
+  sim.state.lockBusy = false;
+});
+
 test('web app: headlines from Google News, parsed, checked and cached', () => {
   const { G, sim, w } = dayAfter();
   const token = sim.state.props.get('APP_TOKEN');

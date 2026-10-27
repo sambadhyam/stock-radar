@@ -189,11 +189,11 @@ var AppApi = {
 
     return {
       isDemo: false, version: SR_VERSION, updatedAt: Date.now(), session: session, asOf: asOf,
-      market: this.market(), engine: this.engine(), strategies: strategies, alerts: alerts,
+      market: this.market(), engine: this.engine(), strategies: PendingSettings.overlayStrategies(strategies), alerts: alerts,
       paper: this.paper(rows, trades, cap, today), scan: this.scan(), fundamentals: this.fundamentals(),
       reports: this.reports(), paperStart: Secrets.props().getProperty('PAPER_START') || '',
       readinessSent: (Secrets.props().getProperty('READINESS_SENT') || '').split(',').filter(Boolean).map(Number),
-      settings: this.settings(book), rules: rules,
+      settings: PendingSettings.overlay(this.settings(book)), rules: rules,
       backtest: Backtest.info(), portfolio: Portfolio.view(), ai: AiSummary.status(), params: Scans.params(),
       labSettings: {
         rates: Review.rates(), sizing: Review.sizing(), lastEntryMinute: Config.minutesOf('noEntriesAfter'), expiryMinute: Config.minutesOf('intradayExpiry'),
@@ -251,7 +251,7 @@ var AppApi = {
       return { name: names[k], ok: !!j.ok, at: Date.parse(j.at) || null, error: j.ok ? '' : Secrets.mask(j.lastError || '').slice(0, 160) };
     });
     var src = snap && snap.sources && snap.sources.indexOf('angel') >= 0 ? 'Angel One' : snap && snap.sources && snap.sources.length ? snap.sources.join(', ') + ' (backup)' : 'Angel One';
-    return { source: src, lastCheck: snap ? snap.at : null, fallbacks: [], jobs: list, schedule: Schedule.summary().kickoffs > 0 };
+    return { source: src, lastCheck: snap ? snap.at : null, fallbacks: [], jobs: list, schedule: Schedule.summary().kickoffs > 0, busy: Jobs.running ? Jobs.running() : null };
   },
 
   paper: function (rows, trades, cap, today) {
@@ -401,34 +401,68 @@ var AppApi = {
       /(\bnse\/bse\b|\bquote and history\b|\bstock price,? news\b|\bprice (&|and) charts?\b|\bnav, reviews\b|\blive (nse|bse)\b|\bshare price today\s+[-–—|]|\bstock price live\b)/i.test(t);
   },
 
-  /** Save settings changed in the app. Only these keys can be changed, each checked. */
+  /**
+   * Save settings changed in the app. Only these keys can be changed, each checked.
+   * When another job holds the engine (the end-of-day run, a backtest step), the change waits in
+   * PendingSettings and is written within a few minutes; the app already sees the new values.
+   */
   saveSettings: function (s, strategies) {
+    var write = this.settingsWrite(s || {}), strat = this.strategyChange(strategies);
     var lock = LockService.getScriptLock();
-    if (!lock.tryLock(8000)) throw new Error('The engine is busy (probably the end-of-day run). Try again in a few minutes.');
+    if (!lock.tryLock(10000)) {
+      PendingSettings.add(write, strat);
+      PendingSettings.schedule();
+      var out = PendingSettings.overlay(this.settings(StrategyBook.load()));
+      out.busy = Jobs.running ? Jobs.running() : null;
+      return out;
+    }
     try {
-      var nums = this.NUMBERS, whole = this.WHOLE;
-      var write = {};
-      Object.keys(nums).forEach(function (k) {
-        if (s[k] === undefined) return;
-        var v = Number(s[k]);
-        if (!(isFinite(v) && v >= nums[k][0] && v <= nums[k][1])) throw new Error(k + ' is out of range');
-        write[k] = String(whole.indexOf(k) >= 0 ? Math.round(v) : v);
-      });
-      this.SWITCHES.forEach(function (k) { if (s[k] !== undefined) write[k] = s[k] === true ? 'TRUE' : 'FALSE'; });
-      if (s.watchlist !== undefined) {
-        var list = (s.watchlist || []).map(function (x) { return String(x).trim().toUpperCase(); }).filter(Boolean);
-        if (list.length > 10 || list.some(function (x) { return !/^[A-Z0-9&-]{1,20}$/.test(x); })) throw new Error('The watchlist takes up to 10 NSE symbols');
-        write.watchlist = list.join(',');
-      }
-      this.writeConfig(write);
-      if (strategies && (strategies.off || strategies.overrides)) this.writeStrategies(strategies.off || null, strategies.overrides || {});
-      Config._cache = null;
-      StrategyBook._map = null;
-      if (write.watchlist) { try { SymbolsDb.lookup(Config.symbols('watchlist')); } catch (e) { ErrorLog.add('watchlistLookup', e); } }
+      PendingSettings.applyNow(); // older waiting changes first, so these newer ones win
+      this.applySettings(write, strat);
       return this.settings(StrategyBook.load());
     } finally {
       lock.releaseLock();
     }
+  },
+
+  /** Settings from the app as Config values, each checked. Throws on anything out of range. */
+  settingsWrite: function (s) {
+    var nums = this.NUMBERS, whole = this.WHOLE, write = {};
+    Object.keys(nums).forEach(function (k) {
+      if (s[k] === undefined) return;
+      var v = Number(s[k]);
+      if (!(isFinite(v) && v >= nums[k][0] && v <= nums[k][1])) throw new Error(k + ' is out of range');
+      write[k] = String(whole.indexOf(k) >= 0 ? Math.round(v) : v);
+    });
+    this.SWITCHES.forEach(function (k) { if (s[k] !== undefined) write[k] = s[k] === true ? 'TRUE' : 'FALSE'; });
+    if (s.watchlist !== undefined) {
+      var list = (s.watchlist || []).map(function (x) { return String(x).trim().toUpperCase(); }).filter(Boolean);
+      if (list.length > 10 || list.some(function (x) { return !/^[A-Z0-9&-]{1,20}$/.test(x); })) throw new Error('The watchlist takes up to 10 NSE symbols');
+      write.watchlist = list.join(',');
+    }
+    return write;
+  },
+
+  /** Strategies switched off and manual statuses from the app, checked; null when there are none. */
+  strategyChange: function (strategies) {
+    if (!strategies || (!strategies.off && !strategies.overrides)) return null;
+    var ok = ['', 'PAPER', 'LIVE_READY', 'REJECTED'], overrides = {};
+    Object.keys(strategies.overrides || {}).forEach(function (id) {
+      var v = String(strategies.overrides[id] || '').toUpperCase();
+      if (ok.indexOf(v) < 0) throw new Error('Unknown status ' + v);
+      overrides[String(id)] = v;
+    });
+    var off = Array.isArray(strategies.off) ? strategies.off.map(String).filter(function (id) { return /^[a-z0-9-]{1,40}$/.test(id); }) : null;
+    return { off: off, overrides: overrides };
+  },
+
+  /** Write checked settings to Config and Strategies. Only while holding the script lock. */
+  applySettings: function (write, strat) {
+    this.writeConfig(write || {});
+    if (strat) this.writeStrategies(strat.off || null, strat.overrides || {});
+    Config._cache = null;
+    StrategyBook._map = null;
+    if (write && write.watchlist) { try { SymbolsDb.lookup(Config.symbols('watchlist')); } catch (e) { ErrorLog.add('watchlistLookup', e); } }
   },
 
   writeConfig: function (write) {
@@ -461,6 +495,74 @@ var AppApi = {
     if (off) this.writeConfig({ strategiesOff: '' }); // the Strategies sheet is now the one place for on/off
   },
 };
+
+/* ============================== Settings saved while the engine is busy ============================== */
+
+/**
+ * The app's changes wait here (a Script Property) while another job holds the engine. They are written by the
+ * next job that takes the lock (Jobs.run) or by a one-off trigger a minute later, whichever comes first.
+ */
+var PendingSettings = {
+  KEY: 'PENDING_SETTINGS',
+
+  get: function () { try { return JSON.parse(Secrets.props().getProperty(this.KEY) || 'null'); } catch (e) { return null; } },
+
+  add: function (write, strat) {
+    var p = this.get() || { write: {}, off: null, overrides: {} };
+    Object.keys(write || {}).forEach(function (k) { p.write[k] = write[k]; });
+    if (strat) {
+      if (strat.off) p.off = strat.off;
+      Object.keys(strat.overrides || {}).forEach(function (id) { p.overrides[id] = strat.overrides[id]; });
+    }
+    p.at = Date.now();
+    Secrets.props().setProperty(this.KEY, JSON.stringify(p));
+  },
+
+  /** Write the waiting changes. Only while holding the script lock. Returns true when there were some. */
+  applyNow: function () {
+    var p = this.get();
+    if (!p) return false;
+    Secrets.props().deleteProperty(this.KEY); // first, so a change that fails is not retried for ever
+    var strat = p.off || Object.keys(p.overrides || {}).length ? { off: p.off || null, overrides: p.overrides || {} } : null;
+    AppApi.applySettings(p.write || {}, strat);
+    return true;
+  },
+
+  schedule: function () {
+    var has = ScriptApp.getProjectTriggers().some(function (t) { return t.getHandlerFunction() === 'applyPendingSettings'; });
+    if (!has) ScriptApp.newTrigger('applyPendingSettings').timeBased().after(60000).create();
+  },
+
+  /** Settings as the app should show them: the waiting changes count as made (they are, within minutes). */
+  overlay: function (out) {
+    var p = this.get();
+    if (!p) return out;
+    Object.keys(p.write || {}).forEach(function (k) {
+      var v = p.write[k];
+      if (k === 'watchlist') out.watchlist = String(v).split(',').filter(Boolean);
+      else if (AppApi.NUMBERS[k]) out[k] = Number(v);
+      else out[k] = v === 'TRUE';
+    });
+    if (p.off) out.strategiesOff = p.off.slice();
+    out.pending = true;
+    return out;
+  },
+
+  /** The same for the manual statuses shown on the strategy cards. */
+  overlayStrategies: function (list) {
+    var p = this.get();
+    if (!p || !p.overrides) return list;
+    list.forEach(function (st) { if (Object.prototype.hasOwnProperty.call(p.overrides, st.id)) st.override = p.overrides[st.id]; });
+    return list;
+  },
+};
+
+/** Trigger handler: write settings saved while the engine was busy; tries again a minute later while it still is. */
+function applyPendingSettings() {
+  ScriptApp.getProjectTriggers().forEach(function (t) { if (t.getHandlerFunction() === 'applyPendingSettings') ScriptApp.deleteTrigger(t); });
+  Jobs.run('settings', function () { PendingSettings.applyNow(); }, { lock: true, wait: 30000 });
+  if (PendingSettings.get()) PendingSettings.schedule();
+}
 
 /* ============================== Menu: connect the app ============================== */
 
