@@ -140,6 +140,7 @@ function world(sim, opts = {}) {
       if (body.chat_id !== KEYS.TG_CHAT_ID) return { code: 400, body: { ok: false, description: 'Bad Request: chat not found' } };
       if (body.text.length > 4096) return { code: 400, body: { ok: false, description: 'message is too long' } };
       w.telegram.push(body.text);
+      if (process.env.DUMP_TG) console.log("\n=== TELEGRAM ===\n" + body.text);
       return { code: 200, body: { ok: true, result: { message_id: w.telegram.length } } };
     }
     if (/ind_nifty(50|200|500)list\.csv$/.test(url)) {
@@ -406,7 +407,7 @@ test('a full trading day: brief at 08:50, snapshots, summary after 16:00, then t
   tickAt('08:30'); eq(w.telegram.length, 0, 'nothing before 08:50');
   const loginsBefore = w.loginCount;
   tickAt('08:50'); eq(w.telegram.length, 1, 'pre-market brief');
-  ok(/Pre-market check/.test(w.telegram[0]) && /Nifty 50 closed at 25,410\.20/.test(w.telegram[0]), w.telegram[0]);
+  ok(/Pre-market check/.test(w.telegram[0]) && /Last close/.test(w.telegram[0]) && /• Nifty 50: 25,410\.20 [▲▼▪]/.test(w.telegram[0]), w.telegram[0]);
   eq(w.loginCount - loginsBefore, 1, 'fresh login for the day');
   tickAt('08:51'); eq(w.telegram.length, 1, 'brief sent once');
   const q0 = w.quoteCalls;
@@ -602,8 +603,9 @@ test('a trading day with an opening-range breakout: one alert, logged and sent, 
   ok(w.candleCalls.some((c) => c.interval === 'FIVE_MINUTE'), 'five-minute candles fetched');
   tickAtDay(G, day, '09:46'); // the 09:40–09:45 bar has closed
   const alertMsg = w.telegram.slice(sent0).join('\n');
-  ok(/PAPER — not for real money/.test(alertMsg) && /BUY TCS/.test(alertMsg) && /Opening-range breakout/.test(alertMsg), alertMsg);
-  ok(/Entry ₹1\d\d\.\d\d – ₹/.test(alertMsg) && /Reward:risk/.test(alertMsg) && /Size: \d+ shares/.test(alertMsg) && /Today until 15:15/.test(alertMsg), alertMsg);
+  ok(/🧪 Paper/.test(alertMsg) && /🟢 <b>BUY TCS<\/b> · ⚡ Intraday/.test(alertMsg) && /Opening-range breakout/.test(alertMsg), alertMsg);
+  ok(/💰 <b>Entry:<\/b> ₹1\d\d\.\d\d – ₹/.test(alertMsg) && /🛑 <b>Stop-loss:<\/b> ₹[\d,.]+ \(−\d/.test(alertMsg) && /🎯 <b>Target:<\/b> ₹[\d,.]+ \(\+\d/.test(alertMsg), alertMsg);
+  ok(/Reward:risk/.test(alertMsg) && /📦 <b>Size:<\/b> \d+ shares/.test(alertMsg) && /Today until 15:15, square off by then/.test(alertMsg) && /📝 <b>Why<\/b>/.test(alertMsg), alertMsg);
   let rows = alertsRows(sim);
   eq(rows.length, 1, 'one alert logged');
   const a = rows[0];
@@ -912,7 +914,7 @@ test('graduation: 30 good paper trades make a strategy Live-ready; a bad run dem
   G.StrategyBook._map = null;
   const fmt = G.AlertBook.format({ symbol: 'TCS', strategy: 'orb', strategyName: 'Opening-range breakout', horizon: 'INTRADAY', direction: 'BUY', entry: 100, entryLow: 99.9, entryHigh: 100, stop: 99, target1: 102, target2: null, rr: 2, confidence: 70, reasons: ['x'] },
     G.StrategyBook.load().orb, { qty: 5, value: 500, riskAmount: 5 }, { text: 'Today until 15:15' }, { state: 'BULL' }, 'Test');
-  ok(/LIVE-READY<\/b> · 67% win, 30 trades/.test(fmt), fmt);
+  ok(/✅ Live-ready \(67% wins over 30 paper trades\)/.test(fmt) && !/Paper signal/.test(fmt), fmt);
   // Thirty losers in a row: the latest 60 trades now lose money, so it is rejected.
   G.Store.append('Alerts', Array.from({ length: 30 }, (_, i) => closedRow(100 + i, -0.8, 30 + i)));
   G.MarketCal._now = at('2026-11-07T10:30:00+05:30');
@@ -1457,7 +1459,7 @@ test('portfolio: holdings from the app are saved, valued after the close, flagge
   const a = alertsRows(sim).find((x) => x.symbol === 'INFY' && x.direction === 'EXIT');
   ok(a && /at or below your stop-loss/.test(a.reasons) && /trailing stop/.test(a.reasons), 'exit alert: ' + (a && a.reasons));
   const msgs = w.telegram.slice(sent0).join('\n----\n');
-  ok(/EXIT CHECK: INFY/.test(msgs), 'exit message');
+  ok(/⚠️ <b>EXIT CHECK · INFY<\/b>/.test(msgs) && /you hold 20 shares/.test(msgs), 'exit message: ' + msgs);
   ok(/Your holdings<\/b>: ₹/.test(msgs) && /INFY: .*under its trailing stop/.test(msgs), 'closing summary: ' + msgs);
   ok(/📅 <b>INFY completes 12 months on Sun 15 Nov<\/b>/.test(msgs), '12-month note');
   w.telegram.length = 0;

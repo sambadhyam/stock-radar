@@ -460,13 +460,14 @@ var Review = {
         r.closedAt instanceof Date && MarketCal.ymd(r.closedAt) === today && Number(r.paperQty) > 0;
     });
     var notTrig = rows.filter(function (r) { return (r.track || 'main') === 'main' && r.outcome === 'NOT_TRIGGERED' && r.closedAt instanceof Date && MarketCal.ymd(r.closedAt) === today; }).length;
-    L.push('<b>Paper trading</b> (virtual ' + Fmt.money(this.sizing().capital, 0) + ')');
+    L.push('💼 <b>Paper trading</b> (virtual ' + Fmt.money(this.sizing().capital, 0) + ')');
     if (closedToday.length) {
       var net = 0, w = 0, l = 0;
       closedToday.forEach(function (r) { net += Number(r.netPnl) || 0; if (Number(r.netPnl) > 0) w++; else if (Number(r.netPnl) < 0) l++; });
       L.push('Closed today: ' + closedToday.length + ' · net ' + Fmt.money(self.round(net), 0) + ' (' + w + ' won, ' + l + ' lost, after charges)');
+      var mark = { TARGET_HIT: '✅', STOP_HIT: '❌', EXPIRED: '⏹️' };
       closedToday.slice(0, 8).forEach(function (r) {
-        L.push('• ' + (r.direction === 'SHORT' ? 'SHORT ' : '') + e(r.symbol) + ' ' + self.outcomeName(r.outcome) + ' ' + Fmt.pct(Number(r.netPct)) + ' (' + Fmt.money(Number(r.netPnl), 0) + ')');
+        L.push((mark[r.outcome] || '•') + ' ' + (r.direction === 'SHORT' ? 'SHORT ' : '') + e(r.symbol) + ' ' + self.outcomeName(r.outcome) + ' ' + Fmt.pct(Number(r.netPct)) + ' (' + Fmt.money(Number(r.netPnl), 0) + ')');
       });
       if (closedToday.length > 8) L.push('… and ' + (closedToday.length - 8) + ' more in the PaperTrades sheet.');
     } else {

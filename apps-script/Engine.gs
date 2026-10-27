@@ -272,17 +272,18 @@ var Engine = {
   preMarket: function (today) {
     if (Angel.configured()) Angel.login(true); // fresh session for the day
     var snap = this.snapshot('preMarket');
-    var lines = ['<b>Good morning. Pre-market check</b>', Fmt.day(today), ''];
-    lines = lines.concat(this.indexLines(snap, 'closed at'));
+    var lines = ['🌅 <b>Good morning · Pre-market check</b>', '📅 ' + Fmt.day(today), '', '📊 <b>Last close</b>'];
+    lines = lines.concat(this.indexLines(snap));
     lines.push('');
     var prep = this.prepareDay(today);
     lines = lines.concat(prep.lines);
     lines.push('');
-    var src = snap.sources.indexOf('angel') >= 0 ? 'Angel One live data' : snap.sources.length ? 'backup data only (' + snap.sources.join(', ') + ')' : 'no data';
-    lines.push('Engine ready: ' + src + '.');
+    var angel = snap.sources.indexOf('angel') >= 0;
+    var src = angel ? 'Angel One live data' : snap.sources.length ? 'backup data only (' + snap.sources.join(', ') + ')' : 'no data';
+    lines.push((angel ? '✅' : '⚠️') + ' Engine ready: ' + src + '.');
     var hol = MarketCal.upcomingHolidays(10);
-    if (hol.length) lines.push('Next holiday: ' + Fmt.day(hol[0].ymd) + ', ' + Notify.esc(hol[0].name) + '.');
-    lines.push('Market opens at 09:15.');
+    if (hol.length) lines.push('🏖️ Next holiday: ' + Fmt.day(hol[0].ymd) + ', ' + Notify.esc(hol[0].name) + '.');
+    lines.push('🔔 Market opens at 09:15.');
     Notify.safeTelegram(lines.join('\n'));
   },
 
@@ -301,12 +302,12 @@ var Engine = {
       lines.push(Market.line(reg));
       var ctx = Market.prepareIntraday(today);
       var n = Object.keys(ctx.s).length, ids = StrategyBook.enabled(['INTRADAY']);
-      lines.push('Intraday: ' + n + ' stocks, ' + ids.length + ' strategies, checked after every 5-minute bar until ' + Config.get('noEntriesAfter') + '.');
+      lines.push('⚡ Intraday: ' + n + ' stocks, ' + ids.length + ' strategies, checked after every 5-minute bar until ' + Config.get('noEntriesAfter') + '.');
       var rules = [Config.get('intradayFollowNifty') !== false ? 'buys while Nifty 50 is above its open, shorts while it is below' : 'buys and shorts all day'];
       if (Config.get('intradayBlockBuysInBear') === true && reg.state === 'BEAR') rules.push('no buys today (Bear day, your setting)');
       if (Config.get('intradayBlockShortsInBull') === true && reg.state === 'BULL') rules.push('no shorts today (Bull day, your setting)');
       if (Config.get('intradayOneAlertPerStock') !== false) rules.push('one alert per stock');
-      lines.push('Intraday rules: ' + rules.join('; ') + '.');
+      lines.push('📏 Intraday rules: ' + rules.join('; ') + '.');
       if (ctx.stale) lines.push('⚠️ ' + ctx.stale + ' stocks have no candle for the last session in the price history.');
       if (reg.state === 'UNKNOWN') lines.push('⚠️ No signals until the regime is known.');
     } catch (e) {
@@ -321,7 +322,7 @@ var Engine = {
     var list = AlertBook.today(today).filter(function (a) { return a.horizon === 'INTRADAY' && (a.track || 'main') !== 'shadow'; });
     if (!list.length) return 0;
     var e = Notify.esc, lines = ['⏰ <b>Square-off reminder</b>', list.length + ' intraday alert' + (list.length > 1 ? 's' : '') + ' went out today. If you took any, close ' + (list.length > 1 ? 'them' : 'it') + ' before ' + e(Config.get('intradayExpiry')) + '.', ''];
-    list.slice(0, 12).forEach(function (a) { lines.push((a.direction === 'SHORT' ? 'SHORT ' : 'BUY ') + e(a.symbol) + ' · ' + e(SRCore.strategy(a.strategy) ? SRCore.strategy(a.strategy).name : a.strategy) + ' · ' + Fmt.time(a.createdAt.getTime())); });
+    list.slice(0, 12).forEach(function (a) { lines.push((a.direction === 'SHORT' ? '🔴 SHORT ' : '🟢 BUY ') + e(a.symbol) + ' · ' + e(SRCore.strategy(a.strategy) ? SRCore.strategy(a.strategy).name : a.strategy) + ' · ' + Fmt.time(a.createdAt.getTime())); });
     if (list.length > 12) lines.push('… and ' + (list.length - 12) + ' more in the Alerts sheet.');
     Notify.safeTelegram(lines.join('\n'));
     return list.length;
@@ -330,14 +331,14 @@ var Engine = {
   endOfDay: function (today, day) {
     var snap = this.snapshot('endOfDay');
     day = day || DayState.load(today);
-    var lines = ['<b>Market closed. Daily summary</b>', Fmt.day(today), ''];
-    lines = lines.concat(this.indexLines(snap, ''));
+    var lines = ['🔔 <b>Market closed · Daily summary</b>', '📅 ' + Fmt.day(today), '', '📊 <b>Markets</b>'];
+    lines = lines.concat(this.indexLines(snap));
     var watch = Config.symbols('watchlist').filter(function (s) { return snap.quotes[s]; });
     if (watch.length) {
-      lines.push('', '<b>Watchlist</b>');
+      lines.push('', '👀 <b>Watchlist</b>');
       watch.sort(function (a, b) { return (snap.quotes[b].changePct || 0) - (snap.quotes[a].changePct || 0); }).forEach(function (s) {
         var q = snap.quotes[s];
-        lines.push(Notify.esc(s) + '  ' + Fmt.money(q.ltp) + '  (' + Fmt.pct(q.changePct) + ')');
+        lines.push('• ' + Notify.esc(s) + ': ' + Fmt.money(q.ltp) + ' ' + Engine.arrow(q.changePct) + ' ' + Fmt.pct(q.changePct));
       });
     }
     lines.push('');
@@ -347,10 +348,10 @@ var Engine = {
     try { lines = lines.concat(this.holdingLines()); } catch (e) { ErrorLog.add('holdingLines', e); }
     var errors = ErrorLog.countToday();
     var source = snap.sources.indexOf('angel') >= 0 ? 'Data from Angel One.' : 'Data from backups only (' + snap.sources.join(', ') + '), Angel One did not answer.';
-    lines.push('', 'Engine: ' + (day.hbCount || 0) + ' market checks today, ' + (errors ? errors + ' error' + (errors > 1 ? 's' : '') + ' logged (see the ErrorLog sheet).' : 'no errors.') + ' ' + source);
+    lines.push('', (errors ? '⚠️' : '⚙️') + ' Engine: ' + (day.hbCount || 0) + ' market checks today, ' + (errors ? errors + ' error' + (errors > 1 ? 's' : '') + ' logged (see the ErrorLog sheet).' : 'no errors.') + ' ' + source);
     if (day.histNote) lines.push('⚠️ ' + Notify.esc(day.histNote));
     if (day.eodSkipped && day.eodSkipped.length) lines.push('⚠️ Skipped after three failed tries: ' + Notify.esc(day.eodSkipped.join(', ')) + '.');
-    lines.push('Paper results are judged on real prices after estimated Zerodha charges. Not investment advice.');
+    lines.push('<i>Paper results are judged on real prices after estimated Zerodha charges. Not investment advice.</i>');
     Notify.safeTelegram(lines.join('\n'));
     if (Config.get('emailDigest')) {
       try { Notify.email('Daily summary ' + Fmt.day(today), Notify.htmlFromTelegram(lines.join('\n'))); }
@@ -366,13 +367,13 @@ var Engine = {
   holdingLines: function () {
     var v = Portfolio.view();
     if (!v) return [];
-    var L = ['', '<b>Your holdings</b>: ' + Fmt.money(v.totals.value, 0) + ' · today ' + Fmt.money(v.totals.dayPnl, 0) + ' (' + Fmt.pct(v.totals.dayPct) + ') · overall ' + Fmt.pct(v.totals.pnlPct)];
+    var L = ['', '🏦 <b>Your holdings</b>: ' + Fmt.money(v.totals.value, 0) + ' · today ' + Engine.arrow(v.totals.dayPnl) + ' ' + Fmt.money(v.totals.dayPnl, 0) + ' (' + Fmt.pct(v.totals.dayPct) + ') · overall ' + Fmt.pct(v.totals.pnlPct)];
     var names = { below200: 'below its 200-day average', trail: 'under its trailing stop', stop: 'at or under your stop-loss', target: 'at or above your target', ltSoon: 'turns 12 months soon' };
     v.holdings.filter(function (h) { return h.flags.length; }).slice(0, 8).forEach(function (h) {
-      L.push('• ' + Notify.esc(h.symbol) + ': ' + h.flags.map(function (f) { return names[f] || f; }).join(', '));
+      L.push('• ⚠️ ' + Notify.esc(h.symbol) + ': ' + h.flags.map(function (f) { return names[f] || f; }).join(', '));
     });
     v.warnings.slice(0, 3).forEach(function (w) {
-      L.push('• ' + (w.kind === 'stock' ? Notify.esc(w.symbol) + ' is ' + w.pct + '% of your portfolio (limit ' + w.limit + '%)' : Notify.esc(w.sector) + ' is ' + w.pct + '% of your portfolio (limit ' + w.limit + '%)'));
+      L.push('• ⚖️ ' + (w.kind === 'stock' ? Notify.esc(w.symbol) + ' is ' + w.pct + '% of your portfolio (limit ' + w.limit + '%)' : Notify.esc(w.sector) + ' is ' + w.pct + '% of your portfolio (limit ' + w.limit + '%)'));
     });
     return L;
   },
@@ -385,19 +386,24 @@ var Engine = {
     var all = AlertBook.today(today);
     var list = all.filter(function (a) { return (a.track || 'main') !== 'shadow'; });
     var shadowN = all.length - list.length;
-    var shadowLine = shadowN ? shadowN + ' more signal' + (shadowN > 1 ? 's were' : ' was') + ' blocked by the market filters (regime, your switches or the day\'s direction) and paper-tracked silently, to test them.' : '';
+    var shadowLine = shadowN ? '🔕 ' + shadowN + ' more signal' + (shadowN > 1 ? 's were' : ' was') + ' blocked by the market filters (regime, your switches or the day\'s direction) and paper-tracked silently, to test them.' : '';
     if (!list.length) {
-      out.push('<b>Signals today</b>: none.' + (day.eodScan && day.eodScan.scanned ? ' ' + day.eodScan.scanned + ' stocks checked at the close.' : ''));
+      out.push('📣 <b>Signals today</b>: none.' + (day.eodScan && day.eodScan.scanned ? ' ' + day.eodScan.scanned + ' stocks checked at the close.' : ''));
       if (shadowLine) out.push(shadowLine);
       return out;
     }
     var by = {};
     list.forEach(function (a) { by[a.horizon] = (by[a.horizon] || 0) + 1; });
     var names = { INTRADAY: 'intraday', SWING: 'swing', MEDIUM: 'medium term', LONG: 'long term' };
-    out.push('<b>Signals today: ' + list.length + '</b> (' + Object.keys(by).map(function (h) { return by[h] + ' ' + (names[h] || h); }).join(', ') + ')');
+    out.push('📣 <b>Signals today: ' + list.length + '</b> (' + Object.keys(by).map(function (h) { return by[h] + ' ' + (names[h] || h); }).join(', ') + ')');
     list.slice(-15).forEach(function (a) {
-      var st = SRCore.strategy(a.strategy);
-      out.push((a.direction === 'EXIT' ? 'EXIT ' : a.direction === 'SHORT' ? 'SHORT ' : 'BUY ') + e(a.symbol) + ' · ' + e(st ? st.name : a.strategy) + ' · conf ' + a.confidence);
+      var st = SRCore.strategy(a.strategy), dir = a.direction === 'EXIT' ? '⚠️ EXIT ' : a.direction === 'SHORT' ? '🔴 SHORT ' : '🟢 BUY ';
+      var line = dir + e(a.symbol) + ' · ' + (AlertBook.HORIZON_ICONS[a.horizon] || '') + ' ' + e(st ? st.name : a.strategy);
+      // Swing, medium and long signals stay open after today, so their plan is repeated here.
+      if (a.direction !== 'EXIT' && a.horizon !== 'INTRADAY' && Number(a.stop) > 0) {
+        line += '\n   💰 ' + Fmt.money(Number(a.entryLow)) + ' – ' + Fmt.money(Number(a.entryHigh)) + ' · 🛑 ' + Fmt.money(Number(a.stop)) + ' · 🎯 ' + Fmt.money(Number(a.target1));
+      }
+      out.push(line);
     });
     if (list.length > 15) out.push('… and ' + (list.length - 15) + ' more in the Alerts sheet.');
     if (shadowLine) out.push(shadowLine);
@@ -418,11 +424,14 @@ var Engine = {
     Notify.safeTelegram('📅 Please add the ' + (year + 1) + ' NSE trading holidays to the Holidays sheet once NSE publishes them (usually mid-December).');
   },
 
-  indexLines: function (snap, verb) {
-    var names = { 'NIFTY 50': 'Nifty 50', 'NIFTY BANK': 'Nifty Bank', 'INDIA VIX': 'India VIX' };
+  indexLines: function (snap) {
+    var names = { 'NIFTY 50': 'Nifty 50', 'NIFTY BANK': 'Nifty Bank', 'INDIA VIX': 'India VIX' }, self = this;
     return this.MAIN_INDICES.filter(function (s) { return snap.quotes[s]; }).map(function (s) {
       var q = snap.quotes[s];
-      return names[s] + (verb ? ' ' + verb : '') + ' ' + Fmt.num(q.ltp) + ' (' + Fmt.pct(q.changePct) + ')';
+      return '• ' + names[s] + ': ' + Fmt.num(q.ltp) + ' ' + self.arrow(q.changePct) + ' ' + Fmt.pct(q.changePct);
     });
   },
+
+  /** ▲ up, ▼ down, ▪ flat. */
+  arrow: function (x) { return !(Math.abs(Number(x)) > 0.004) ? '▪' : x > 0 ? '▲' : '▼'; },
 };

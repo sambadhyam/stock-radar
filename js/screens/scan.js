@@ -1,5 +1,5 @@
 // Scan: ranked long / medium / swing lists, and the stock detail sheet.
-import { h, fmt, tone } from '../util.js';
+import { h, fmt, tone, fill } from '../util.js';
 import { t } from '../i18n.js';
 import { screenHead, segmented, openSheet, kvList, previewBanner, alertRow, toast } from '../ui.js';
 import { candleChart } from '../charts.js';
@@ -16,7 +16,7 @@ export function render({ data, query }) {
       !data.isDemo && data.scan.at ? ' ' + t('scan.updated', { date: fmt.dayMonth(data.scan.at) }) : '');
     const empty = !rows.length ? h('p', { class: 'muted', style: { margin: '14px 0' } }, tab === 'long' ? t('scan.longEmpty') : t('scan.empty')) : null;
     const list = h('ul', { class: 'list' }, rows.map((r, i) => h('li', null,
-      h('button', { type: 'button', class: 'row', onclick: () => openStock(r.symbol) },
+      h('button', { type: 'button', class: 'row', onclick: () => openStock(r.symbol, tab) },
         h('span', { class: 'row-title' }, h('span', { class: 'rank' }, String(i + 1)), r.symbol),
         h('span', { class: 'row-right score' },
           h('span', { class: 'score-bar', 'aria-hidden': 'true' }, h('i', { style: { width: r.score + '%' } })),
@@ -33,7 +33,12 @@ export function render({ data, query }) {
           h('span', { class: 'row-title' }, e.symbol), h('span'),
           h('span', { class: 'row-meta' }, e.sector)))))) : null;
     const fundLink = tab === 'long' ? h('a', { class: 'sec-link', href: '#/fundamentals' }, t('scan.importFund')) : null;
-    body.replaceChildren(note, fundLink || '', empty || list, etfs || '');
+    // Swing and medium: real signals (with their trade plan) first, then the watch list of near-setups.
+    const plans = tab === 'swing' || tab === 'medium' ? planSection(data, tab) : null;
+    const watchHead = plans ? h('div', { style: { marginTop: '24px' } },
+      h('h2', { class: 'sec-title' }, t('scan.watchTitle.' + tab)),
+      h('p', { class: 'sec-note' }, t('scan.watchNote'))) : null;
+    fill(body, plans, watchHead, note, fundLink, empty || list, etfs);
   };
   draw();
   return h('div', null,
@@ -47,7 +52,24 @@ export function render({ data, query }) {
     body);
 }
 
-export function openStock(symbol) {
+/** Open swing or medium signals: still waiting for their entry, or in a paper trade. */
+function openPlans(data, hz) {
+  const now = Date.now();
+  return (data.alerts || []).filter((a) => a.horizon === hz && a.dir !== 'exit' && a.state !== 'CLOSED' && (a.state === 'ACTIVE' || !a.validTill || a.validTill > now))
+    .sort((a, b) => b.time - a.time);
+}
+
+function planSection(data, hz) {
+  const list = openPlans(data, hz);
+  return h('section', { class: 'sec', style: { marginTop: '8px' } },
+    h('h2', { class: 'sec-title' }, t('scan.plans'), list.length ? h('span', { class: 'sec-count' }, String(list.length)) : null),
+    list.length
+      ? [h('ul', { class: 'list' }, list.map((a) => alertRow(a, openAlert))), h('p', { class: 'note faint', style: { marginTop: '6px' } }, t('scan.plansNote'))]
+      : h('p', { class: 'muted' }, t('scan.plansNone.' + hz)));
+}
+
+/** A stock's page. horizon: the Scan tab it was opened from, so that horizon's alerts come first. */
+export function openStock(symbol, horizon) {
   const data = getData();
   const holder = h('div', null, h('p', { class: 'muted', style: { padding: '24px 0' } }, t('stock.loading')));
   let title = null;
@@ -55,14 +77,14 @@ export function openStock(symbol) {
     title = h('div', { class: 'grow' }, h('h2', { class: 'sheet-title' }, symbol));
     return h('div', null, h('div', { class: 'sheet-head' }, title, closeBtn), holder);
   }, { label: symbol });
-  const fill = (sc) => {
+  const show = (sc) => {
     if (!sc) { holder.replaceChildren(h('p', { class: 'muted' }, t('alert.chartNone'))); return; }
-    const parts = stockBody(data, symbol, sc);
-    title.replaceChildren(...parts.head);
-    holder.replaceChildren(...parts.body);
+    const parts = stockBody(data, symbol, sc, horizon);
+    fill(title, parts.head);
+    fill(holder, parts.body);
   };
-  if (data.isDemo) fill(data.stockChart(symbol));
-  else loadStockChart(symbol).then(fill).catch((e) => holder.replaceChildren(h('p', { class: 'muted' }, t('alert.chartFail', { why: e.message }))));
+  if (data.isDemo) show(data.stockChart(symbol));
+  else loadStockChart(symbol).then(show).catch((e) => holder.replaceChildren(h('p', { class: 'muted' }, t('alert.chartFail', { why: e.message }))));
 }
 
 /** One headline: the title as a link, then its source and date on a line of their own. */
@@ -78,7 +100,7 @@ function newsItem(n) {
     h('div', { class: 'news-meta' }, [source, when].filter(Boolean).join(' · '))));
 }
 
-function stockBody(data, symbol, sc) {
+function stockBody(data, symbol, sc, horizon) {
   const all = sc.all;
   const last = all[all.length - 1];
   const prevC = all[all.length - 2] || last;
@@ -127,13 +149,28 @@ function stockBody(data, symbol, sc) {
           [t('fund.pledge'), f.pledge != null ? fmt.pct(f.pledge, 1, false) : '—'],
         ]),
         h('p', { class: 'note' }, t('fund.note'))) : null,
-      h('h3', null, t('stock.pastAlerts')),
-      pastAlerts.length ? h('ul', { class: 'list' }, pastAlerts.map((a) => alertRow(a, openAlert))) : h('p', { class: 'muted' }, t('stock.noAlerts')),
+      alertsBlock(pastAlerts, horizon),
       h('h3', null, t('stock.news')),
       news,
       aiBlock(data, symbol),
     ].filter(Boolean),
   };
+}
+
+/** Alerts on this stock: the horizon of the Scan tab first, the others under their own heading. */
+function alertsBlock(list, horizon) {
+  const sorted = [...list].sort((a, b) => b.time - a.time);
+  const rows = (xs) => h('ul', { class: 'list' }, xs.map((a) => alertRow(a, openAlert)));
+  if (!horizon || horizon === 'long') {
+    return h('div', null, h('h3', null, t('stock.pastAlerts')), sorted.length ? rows(sorted) : h('p', { class: 'muted' }, t('stock.noAlerts')));
+  }
+  const mine = sorted.filter((a) => a.horizon === horizon), others = sorted.filter((a) => a.horizon !== horizon);
+  const hz = t('hz.' + horizon);
+  return h('div', null,
+    h('h3', null, t('stock.alertsFor', { hz })),
+    mine.length ? rows(mine) : h('p', { class: 'muted' }, t('stock.noAlertsFor', { hz: hz.toLowerCase() })),
+    others.length ? h('h3', null, t('stock.alertsOther')) : null,
+    others.length ? rows(others) : null);
 }
 
 /** Optional AI summary of the stock's headlines (Gemini, set up in the sheet; off by default). */

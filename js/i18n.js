@@ -77,6 +77,12 @@ const en = {
   'scan.longNote': 'Nifty 500 and core ETFs ranked by quality and value. Fundamentals come from your imported CSV.',
   'scan.mediumNote': 'Nifty 200 stocks in a confirmed uptrend, ranked by strength against Nifty 50.',
   'scan.swingNote': 'Nifty 200 setups that may trigger in the next few sessions.',
+  'scan.plans': 'Open signals with a trade plan',
+  'scan.plansNote': 'Each came to Telegram with its entry range, stop-loss and targets. Tap one for the full plan and position size.',
+  'scan.plansNone.swing': 'No open swing signals right now. The engine checks every stock after each close; when a setup triggers, you get a Telegram alert with the entry range, stop-loss and targets, and it shows here.',
+  'scan.plansNone.medium': 'No open medium-term signals right now. The engine checks every stock after each close; when a setup triggers, you get a Telegram alert with the entry range, stop-loss and targets, and it shows here.',
+  'scan.watchTitle.swing': 'Close to a setup (not signals yet)', 'scan.watchTitle.medium': 'Strongest uptrends (not signals yet)',
+  'scan.watchNote': 'A watch list only: there is no entry, stop-loss or target until a strategy triggers at a close.',
   'scan.score': 'Score',
   'scan.complete': 'Data {pct}% complete',
 
@@ -84,6 +90,8 @@ const en = {
   'stock.range': '52-week range',
   'stock.dma50': '50-day average', 'stock.dma200': '200-day average',
   'stock.fund': 'Fundamentals', 'stock.pastAlerts': 'Past alerts on this stock', 'stock.noAlerts': 'No alerts on this stock yet.',
+  'stock.alertsFor': '{hz} alerts on this stock', 'stock.alertsOther': 'Other alerts on this stock (other horizons)',
+  'stock.noAlertsFor': 'No {hz} alerts on this stock yet. When one triggers at a close, it comes to Telegram with its entry range, stop-loss and targets, and shows here.',
   'stock.news': 'News',
   'stock.newsNote': 'Headlines from Google News will appear here once the backend is connected.',
 

@@ -1,5 +1,5 @@
 // ui.js — shared interface components.
-import { h, s, icon, fmt, tone } from './util.js';
+import { h, s, icon, fmt, tone, istParts } from './util.js';
 import { t } from './i18n.js';
 import { ICONS } from './icons.js';
 
@@ -114,7 +114,13 @@ export function alertRow(a, onOpen) {
         a.outcome
           ? h('span', { class: a.outcome.state === 'not' ? 'faint' : tone(a.outcome.pct) },
             a.outcome.state === 'not' || a.outcome.pct == null ? t(OUTCOME_KEY[a.outcome.state] || 'legend.flat') : `${t(OUTCOME_KEY[a.outcome.state])} ${fmt.pct(a.outcome.pct, 1)}`)
-          : h('span', { class: 'faint' }, fmt.time(a.time)))));
+          : h('span', { class: 'faint' }, whenShort(a.time)))));
+}
+
+/** "12:11" for today, "26 Oct" for an earlier day. */
+function whenShort(ms) {
+  if (!ms) return '';
+  return istParts(new Date(ms)).ymd === istParts().ymd ? fmt.time(ms) : fmt.dayMonth(ms);
 }
 
 const OUTCOME_KEY = { target: 'legend.win', stop: 'legend.loss', expired: 'legend.flat', not: 'legend.not' };

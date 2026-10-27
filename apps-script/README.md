@@ -269,19 +269,22 @@ Every `.gs` file changed and there is one new file. `appsscript.json` is unchang
 
 That's all. The schedule keeps running, and the backtest starts by itself after the next close.
 
-## Update 0.6.1: cleaner news, and settings that are never lost
+## Update 0.6.2: clearer Telegram messages, cleaner news, settings that are never lost
 
-- News in a stock's sheet leaves out price and quote pages ("… Share Price - Groww") and anything older than four months, searches the last 30 days first, and lists the newest first. AI summaries use the same headlines.
-- Settings saved in the app while the engine is busy (for example during the end-of-day run) no longer fail: they wait and are written within a few minutes, and the app already shows them.
-- A backtest step that finds the engine busy waits and tries again instead of counting as a failure.
+- Telegram messages are laid out in sections with emojis: 🟢 BUY / 🔴 SHORT / ⚠️ EXIT, then 💰 entry, 🛑 stop-loss and 🎯 targets (each with its % from the entry), ⚖️ reward:risk, 📦 size, ⏰ validity and 📝 the reasons. The closing summary repeats the entry, stop and target of every swing and medium signal.
+- News leaves out price and quote pages and anything older than four months, searches the last 30 days first, and lists the newest first. AI summaries use the same headlines.
+- Settings saved in the app while the engine is busy (for example during the end-of-day run) wait and are written within a few minutes; the app already shows them.
+- A backtest step that finds the engine busy tries again instead of counting as a failure.
 
-1. Paste four files (open each link, **Ctrl+A**, **Ctrl+C**; in Apps Script click in the matching file, **Ctrl+A**, **Ctrl+V**), then **Ctrl+S**:
-   [Api.gs](https://raw.githubusercontent.com/sambadhyam/stock-radar/main/apps-script/Api.gs) → `Api`,
+1. Paste six files (open each link, **Ctrl+A**, **Ctrl+C**; in Apps Script click in the matching file, **Ctrl+A**, **Ctrl+V**), then **Ctrl+S**:
+   [Signals.gs](https://raw.githubusercontent.com/sambadhyam/stock-radar/main/apps-script/Signals.gs) → `Signals`,
    [Engine.gs](https://raw.githubusercontent.com/sambadhyam/stock-radar/main/apps-script/Engine.gs) → `Engine`,
+   [Review.gs](https://raw.githubusercontent.com/sambadhyam/stock-radar/main/apps-script/Review.gs) → `Review`,
+   [Api.gs](https://raw.githubusercontent.com/sambadhyam/stock-radar/main/apps-script/Api.gs) → `Api`,
    [Lab.gs](https://raw.githubusercontent.com/sambadhyam/stock-radar/main/apps-script/Lab.gs) → `Lab`,
    [Data.gs](https://raw.githubusercontent.com/sambadhyam/stock-radar/main/apps-script/Data.gs) → `Data`.
 2. Publish the web app again: **Deploy → Manage deployments → ✏️ → Version: New version → Deploy**.
-3. In the app, Settings shows "Connected to the engine (version 0.6.1)" at the bottom once the new version is live.
+3. In the app, Settings shows "Connected to the engine (version 0.6.2)" at the bottom once the new version is live.
 
 ## Backtests
 

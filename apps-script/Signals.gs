@@ -269,9 +269,11 @@ var Market = {
 
   /** One line for messages, e.g. "Bull (Nifty above its 200-day average …)". */
   line: function (reg) {
-    if (!reg) return 'Market regime: not worked out yet.';
-    return 'Market regime: <b>' + SRCore.regimeName(reg.state) + '</b>. ' + Notify.esc(reg.reasons.join(' '));
+    if (!reg) return '❔ Market regime: not worked out yet.';
+    return this.icon(reg.state) + ' Market regime: <b>' + SRCore.regimeName(reg.state) + '</b>. ' + Notify.esc(reg.reasons.join(' '));
   },
+  /** 🐂 Bull, 🐻 Bear, ⚖️ Neutral, 🌪️ High volatility, ❔ not known yet. */
+  icon: function (state) { return { BULL: '🐂', BEAR: '🐻', NEUTRAL: '⚖️', HIGH_VOL: '🌪️' }[state] || '❔'; },
 
   /** Stocks watched intraday: the intraday index plus the watchlist, up to the configured limit. */
   intradaySymbols: function () {
@@ -626,6 +628,7 @@ var IntraSeen = {
 var AlertBook = {
   EXTRA_HEADERS: ['qty', 'window', 'telegram', 'track', 'fillPrice', 'exitPrice', 'paperQty', 'grossPnl', 'charges', 'netPnl', 'niftyPct', 'alphaPct', 'holdDays', 'evaluatedAt'],
   HORIZON_NAMES: { INTRADAY: 'Intraday', SWING: 'Swing', MEDIUM: 'Medium term', LONG: 'Long term' },
+  HORIZON_ICONS: { INTRADAY: '⚡', SWING: '📈', MEDIUM: '🗓️', LONG: '🌱' },
 
   ensureHeaders: function () {
     var sh = Store.require('Alerts'), have = Store.headers(sh).filter(function (h) { return h !== ''; });
@@ -723,29 +726,39 @@ var AlertBook = {
     return { logged: rows.length, sent: sent };
   },
 
-  /** One alert as a Telegram message. */
+  /** One alert as a Telegram message: what to do and at which prices first, then why, then the context. */
   format: function (sig, st, size, win, regime, source) {
     var e = Notify.esc, L = [];
     var trades = st.track ? st.track.trades : 0;
-    if (st.status === 'LIVE_READY') L.push('✅ <b>LIVE-READY</b> · ' + Math.round(st.track ? st.track.winRatePct : 0) + '% win, ' + trades + ' trades');
-    else L.push('🧪 <b>PAPER — not for real money</b>' + (trades ? ' · ' + trades + ' paper trades so far' : ''));
-    var hz = this.HORIZON_NAMES[sig.horizon] || sig.horizon;
+    var hz = this.HORIZON_NAMES[sig.horizon] || sig.horizon, icon = this.HORIZON_ICONS[sig.horizon] || '📈';
+    var badge = st.status === 'LIVE_READY'
+      ? '✅ Live-ready (' + Math.round(st.track ? st.track.winRatePct : 0) + '% wins over ' + trades + ' paper trades)'
+      : '🧪 Paper' + (trades ? ' (' + trades + ' paper trade' + (trades === 1 ? '' : 's') + ' so far)' : '');
     if (sig.direction === 'EXIT') {
-      L.push('⚠️ <b>EXIT CHECK: ' + e(sig.symbol) + '</b> · ' + e(sig.strategyName));
-      L.push('Close ' + Fmt.money(sig.entry) + (size.qty ? ' · Your holding: ' + size.qty + ' shares' : ''));
+      L.push('⚠️ <b>EXIT CHECK · ' + e(sig.symbol) + '</b>');
+      L.push('🛡️ ' + e(sig.strategyName) + ' · a stock you hold');
+      L.push('');
+      L.push('💵 <b>Close:</b> ' + Fmt.money(sig.entry) + (size.qty ? ' · you hold ' + size.qty + ' shares' : ''));
+      L.push('👉 Look at it before the next close. This is a warning, not an order.');
     } else {
-      L.push('<b>' + (sig.direction === 'SHORT' ? 'SHORT ' : 'BUY ') + e(sig.symbol) + '</b> · ' + hz + ' · ' + e(sig.strategyName));
-      if (sig.direction === 'SHORT') L.push('Sell first, intraday only (MIS).');
-      L.push('Entry ' + Fmt.money(sig.entryLow) + ' – ' + Fmt.money(sig.entryHigh));
-      L.push('Stop ' + Fmt.money(sig.stop) + ' · Target ' + Fmt.money(sig.target1) + (sig.target2 ? ' / ' + Fmt.money(sig.target2) : ''));
-      L.push('Reward:risk ' + sig.rr.toFixed(1) + ' · Confidence ' + sig.confidence + '/100');
-      if (size.qty > 0) L.push('Size: ' + size.qty + ' shares (' + Fmt.money(size.value, 0) + '), risking ' + Fmt.money(size.riskAmount, 0) + (size.capped ? ', capped by the per-stock limit' : ''));
-      else L.push('Size: the stop is too wide for your risk setting, so no position fits.');
-      L.push('Valid: ' + e(win.text));
+      var short = sig.direction === 'SHORT', ref = (sig.entryLow + sig.entryHigh) / 2;
+      var move = function (p) { return Fmt.pct((p / ref - 1) * 100, 1); };
+      L.push((short ? '🔴 <b>SHORT ' : '🟢 <b>BUY ') + e(sig.symbol) + '</b> · ' + icon + ' ' + hz);
+      L.push(e(sig.strategyName) + ' · ' + badge);
+      L.push('');
+      L.push('💰 <b>Entry:</b> ' + Fmt.money(sig.entryLow) + ' – ' + Fmt.money(sig.entryHigh) +
+        (short ? ' (sell first, intraday MIS only)' : sig.horizon === 'INTRADAY' ? '' : ' (from the next session, only while the price is in this range)'));
+      L.push('🛑 <b>Stop-loss:</b> ' + Fmt.money(sig.stop) + ' (' + move(sig.stop) + ')');
+      L.push('🎯 <b>Target:</b> ' + Fmt.money(sig.target1) + ' (' + move(sig.target1) + ')' + (sig.target2 ? ' · then ' + Fmt.money(sig.target2) + ' (' + move(sig.target2) + ')' : ''));
+      L.push('⚖️ <b>Reward:risk</b> ' + sig.rr.toFixed(1) + ' · 📊 <b>Confidence</b> ' + sig.confidence + '/100');
+      if (size.qty > 0) L.push('📦 <b>Size:</b> ' + size.qty + ' shares (' + Fmt.money(size.value, 0) + (size.capped ? ', the most your per-stock limit allows' : '') + ') · loss at the stop ' + Fmt.money(size.riskAmount, 0));
+      else L.push('📦 <b>Size:</b> the stop is too far for your risk setting, so no position fits.');
+      L.push('⏰ <b>Valid:</b> ' + e(win.text) + (sig.horizon === 'INTRADAY' ? ', square off by then' : ''));
     }
-    L.push('', '<b>Why</b>');
+    L.push('', '📝 <b>Why</b>');
     sig.reasons.forEach(function (r) { L.push('• ' + e(r)); });
-    L.push('', 'Regime: ' + SRCore.regimeName(regime ? regime.state : 'UNKNOWN') + ' · Data: ' + e(source));
+    L.push('', Market.icon(regime ? regime.state : 'UNKNOWN') + ' Market: ' + SRCore.regimeName(regime ? regime.state : 'UNKNOWN') + ' · ' + e(source));
+    if (st.status !== 'LIVE_READY' && sig.direction !== 'EXIT') L.push('<i>Paper signal: the strategy is still being tested, so this is not for real money yet.</i>');
     return L.join('\n');
   },
 
