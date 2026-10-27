@@ -1,7 +1,7 @@
 // state.js — user settings, kept on this phone. When the engine is connected, its settings win and are saved there too.
 import { store } from './util.js';
 
-export const APP_VERSION = '0.6.0';
+export const APP_VERSION = '0.6.1';
 
 export const DEFAULTS = Object.freeze({
   theme: 'system',          // 'system' | 'light' | 'dark'

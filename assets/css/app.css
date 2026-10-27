@@ -313,6 +313,9 @@ main:focus { outline: none; }
 
 .bullets { margin: 0; padding: 0; list-style: none; display: grid; gap: 8px; }
 .bullets li { display: grid; grid-template-columns: 14px 1fr; gap: 8px; }
+.bullets li > * { grid-column: 2; min-width: 0; } /* extra children stay in the text column, never under the dot */
+.news-list { gap: 14px; }
+.news-meta { font-size: var(--fs-xs); color: var(--text-3); margin-top: 3px; }
 .bullets li::before { content: ""; width: 6px; height: 6px; margin-top: 8px; border-radius: 50%; background: var(--brand); }
 
 /* ---------- Forms ---------- */

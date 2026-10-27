@@ -65,6 +65,19 @@ export function openStock(symbol) {
   else loadStockChart(symbol).then(fill).catch((e) => holder.replaceChildren(h('p', { class: 'muted' }, t('alert.chartFail', { why: e.message }))));
 }
 
+/** One headline: the title as a link, then its source and date on a line of their own. */
+function newsItem(n) {
+  const source = String(n.source || '').trim();
+  let title = String(n.title || '');
+  // Google News titles end with " - Source"; the source is already shown below the title.
+  if (source && title.toLowerCase().endsWith(' - ' + source.toLowerCase())) title = title.slice(0, -(source.length + 3));
+  const thisYear = new Date().getFullYear() === new Date(n.at || 0).getFullYear();
+  const when = n.at ? (thisYear ? fmt.dayMonth(n.at) : fmt.shortDate(n.at)) : '';
+  return h('li', null, h('div', null,
+    h('a', { href: n.link, target: '_blank', rel: 'noopener noreferrer' }, title),
+    h('div', { class: 'news-meta' }, [source, when].filter(Boolean).join(' · '))));
+}
+
 function stockBody(data, symbol, sc) {
   const all = sc.all;
   const last = all[all.length - 1];
@@ -78,11 +91,12 @@ function stockBody(data, symbol, sc) {
   const f = data.fundamentals[symbol];
   const news = h('div', null, h('p', { class: 'muted' }, data.isDemo ? t('stock.newsNote') : t('stock.newsLoading')));
   if (!data.isDemo) {
-    api.news(symbol).then((r) => news.replaceChildren(
-      r.items.length ? h('ul', { class: 'bullets' }, r.items.map((n) => h('li', null,
-        h('a', { href: n.link, target: '_blank', rel: 'noopener noreferrer' }, n.title),
-        h('span', { class: 'faint' }, ' · ' + [n.source, n.at ? fmt.dayMonth(n.at) : ''].filter(Boolean).join(', '))))) : h('p', { class: 'muted' }, t('stock.newsNone')),
-      h('p', { class: 'note faint' }, t('stock.newsSource'))))
+    api.news(symbol).then((r) => {
+      const items = [...(r.items || [])].sort((a, b) => (b.at || 0) - (a.at || 0));
+      news.replaceChildren(
+        items.length ? h('ul', { class: 'bullets news-list' }, items.map(newsItem)) : h('p', { class: 'muted' }, t('stock.newsNone')),
+        h('p', { class: 'note faint' }, t('stock.newsSource')));
+    })
       .catch((e) => news.replaceChildren(h('p', { class: 'muted' }, t('stock.newsFail', { why: e.message }))));
   }
   return {

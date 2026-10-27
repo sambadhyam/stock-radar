@@ -162,6 +162,12 @@ function world(sim, opts = {}) {
     }
     if (url.startsWith('https://news.google.com/rss/search')) {
       w.newsCalls = (w.newsCalls || 0) + 1;
+      if (w.newsFor) {
+        // A test's own feed: [title, pubDate, source] per item, for the decoded query.
+        const q = decodeURIComponent(url.split('q=')[1].split('&')[0]);
+        const xml = w.newsFor(q).map(([title, date, src], i) => `<item><title><![CDATA[${title}]]></title><link>https://news.google.com/rss/articles/t${i}</link><pubDate>${date}</pubDate><source url="https://example.com">${src}</source></item>`).join('');
+        return { code: 200, body: '<?xml version="1.0"?><rss><channel>' + xml + '</channel></rss>' };
+      }
       const item = (i) => `<item><title><![CDATA[Headline ${i} &amp; more]]></title><link>https://news.google.com/rss/articles/abc${i}</link><pubDate>Mon, 26 Oct 2026 0${i}:00:00 GMT</pubDate><source url="https://example.com">Paper ${i}</source></item>`;
       return { code: 200, body: '<?xml version="1.0"?><rss><channel>' + [1, 2, 3].map(item).join('') + '<item><title>No link</title><link>javascript:alert(1)</link></item></channel></rss>' };
     }
@@ -1149,11 +1155,39 @@ test('web app: headlines from Google News, parsed, checked and cached', () => {
   const r = post(G, { a: 'news', t: token, symbol: 'RELIANCE' });
   eq(r.ok, true, r.error);
   eq(r.data.items.length, 3, 'unsafe link dropped');
-  eq(r.data.items[0].title, 'Headline 1 & more'); eq(r.data.items[0].source, 'Paper 1'); ok(r.data.items[0].at > 0);
+  eq(r.data.items[0].title, 'Headline 3 & more', 'newest first'); eq(r.data.items[0].source, 'Paper 3'); ok(r.data.items[0].at > r.data.items[2].at);
   post(G, { a: 'news', t: token, symbol: 'RELIANCE' });
   eq(w.newsCalls, 1, 'second call from the cache');
   const q = decodeURIComponent(sim.state.requests.find((x) => x.url.includes('news.google.com')).url.split('q=')[1].split('&')[0]);
   ok(/"RELIANCE"|RELIANCE share/.test(q), q);
+});
+
+test('web app: news leaves out price pages and old items, and looks further back when the month is quiet', () => {
+  const { G, sim, w } = dayAfter();
+  const token = sim.state.props.get('APP_TOKEN');
+  const queries = [];
+  w.newsFor = (q) => {
+    queries.push(q);
+    return /when:30d/.test(q) ? [
+      ['TCS Share Price - Groww', 'Mon, 26 Oct 2026 05:00:00 GMT', 'Groww'],
+      ['Tata Consultancy Services (TCS.NS) stock price, news, quote and history - Yahoo Finance', 'Sun, 25 Oct 2026 05:00:00 GMT', 'Yahoo Finance'],
+      ['TCS shares rise 2% after strong Q2 deal wins - Mint', 'Fri, 23 Oct 2026 06:00:00 GMT', 'Mint'],
+    ] : [
+      ['TCS Share Price Today - TATA CONSULTANCY Stock Price Live NSE/BSE - Univest', 'Mon, 26 Oct 2026 07:00:00 GMT', 'Univest'],
+      ['Gold BeES (₹ 116.01) - NAV, Reviews & asset allocation - The Economic Times', 'Thu, 01 Oct 2026 07:00:00 GMT', 'The Economic Times'],
+      ['TCS wins a large UK pension contract - The Economic Times', 'Tue, 06 Oct 2026 08:00:00 GMT', 'The Economic Times'],
+      ['TCS shares rise 2% after strong Q2 deal wins - Mint', 'Fri, 23 Oct 2026 06:00:00 GMT', 'Mint'],
+      ['TCS Q1 results: profit up 6% - Business Standard', 'Thu, 10 Jul 2025 08:00:00 GMT', 'Business Standard'],
+    ];
+  };
+  const r = post(G, { a: 'news', t: token, symbol: 'TCS' });
+  eq(r.ok, true, r.error);
+  eq(r.data.items.map((x) => x.title).join(' | '), 'TCS shares rise 2% after strong Q2 deal wins - Mint | TCS wins a large UK pension contract - The Economic Times',
+    'news only, newest first, once each, nothing older than 120 days');
+  eq(queries.length, 2, 'the last 30 days first, then further back');
+  ok(/when:30d$/.test(queries[0]) && !/when:/.test(queries[1]), queries.join(' / '));
+  ok(!G.AppApi.quotePage('Reliance share price jumps 4% after Q2 results beat estimates - Mint'), 'a news headline with "share price" stays');
+  ok(G.AppApi.quotePage('RELIANCE Stock Price and Chart — NSE:RELIANCE — TradingView'), 'chart pages go');
 });
 
 test('connect: the link carries the web app address and token; bad addresses are refused', () => {

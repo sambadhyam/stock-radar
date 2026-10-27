@@ -345,31 +345,60 @@ var AppApi = {
     return { symbol: symbol, mode: 'day', candles: pack(History.get(symbol).slice(-330)) };
   },
 
-  /** Recent headlines for a stock from Google News (the browser cannot read the feed directly). Cached 30 minutes. */
+  /**
+   * Recent headlines for a stock from Google News (the browser cannot read the feed directly), newest first.
+   * Searches the last 30 days first and looks further back only when that finds little. Price and quote pages
+   * ("… Share Price - Groww") are not news and are left out, and so is anything older than 120 days. Cached 30 minutes.
+   */
   news: function (symbol) {
     symbol = symbol.toUpperCase();
     if (!/^[A-Z0-9&-]{1,20}$/.test(symbol)) throw new Error('Unknown symbol');
-    var cache = CacheService.getScriptCache(), key = 'news_' + symbol, hit = cache.get(key);
+    var cache = CacheService.getScriptCache(), key = 'news2_' + symbol, hit = cache.get(key);
     if (hit) { try { return JSON.parse(hit); } catch (e) { /* refetch */ } }
     var meta = SymbolsDb.load()[symbol] || {};
     var name = String(meta.name || '').replace(/\s+(Ltd|Limited)\.?$/i, '').trim();
     var q = (name && name.toUpperCase() !== symbol ? '"' + name + '" OR ' : '') + symbol + ' share';
+    var items = this.newsFeed(q + ' when:30d', true);
+    if (items.length < 3) {
+      var more = this.newsFeed(q, false), seen = {};
+      items.forEach(function (it) { seen[it.title.toLowerCase()] = true; });
+      more.forEach(function (it) { if (!seen[it.title.toLowerCase()]) { seen[it.title.toLowerCase()] = true; items.push(it); } });
+      items.sort(function (a, b) { return (b.at || 0) - (a.at || 0); });
+    }
+    var out = { symbol: symbol, items: items.slice(0, 8) };
+    try { cache.put(key, JSON.stringify(out), 1800); } catch (e) { /* too big to cache */ }
+    return out;
+  },
+
+  /** One Google News search: news items only, newest first. A failed first search is an error; a failed second one is skipped. */
+  newsFeed: function (q, required) {
     var res = Http.request('https://news.google.com/rss/search?q=' + encodeURIComponent(q) + '&hl=en-IN&gl=IN&ceid=IN:en', { method: 'get' }, { retries: 1 });
-    if (res.code !== 200) throw new Error('Google News did not answer (' + (res.code ? 'HTTP ' + res.code : 'no response') + ')');
-    var text = String(res.text || ''), items = [], re = /<item>([\s\S]*?)<\/item>/g, m;
+    if (res.code !== 200) {
+      if (required) throw new Error('Google News did not answer (' + (res.code ? 'HTTP ' + res.code : 'no response') + ')');
+      return [];
+    }
+    var text = String(res.text || ''), items = [], re = /<item>([\s\S]*?)<\/item>/g, m, self = this;
+    var oldest = MarketCal.now().getTime() - 120 * 86400000;
     var tag = function (block, name) {
       var mm = new RegExp('<' + name + '[^>]*>([\\s\\S]*?)<\\/' + name + '>').exec(block);
       if (!mm) return '';
       return mm[1].replace(/^<!\[CDATA\[|\]\]>$/g, '').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, '&').trim();
     };
-    while ((m = re.exec(text)) && items.length < 8) {
-      var title = tag(m[1], 'title'), link = tag(m[1], 'link');
-      if (!title || !/^https:\/\//.test(link)) continue;
-      items.push({ title: title.slice(0, 220), link: link, source: tag(m[1], 'source').slice(0, 60), at: Date.parse(tag(m[1], 'pubDate')) || null });
+    var n = 0;
+    while ((m = re.exec(text)) && n++ < 40) {
+      var title = tag(m[1], 'title'), link = tag(m[1], 'link'), at = Date.parse(tag(m[1], 'pubDate')) || null;
+      if (!title || !/^https:\/\//.test(link) || self.quotePage(title) || (at && at < oldest)) continue;
+      items.push({ title: title.slice(0, 220), link: link, source: tag(m[1], 'source').slice(0, 60), at: at });
     }
-    var out = { symbol: symbol, items: items };
-    try { cache.put(key, JSON.stringify(out), 1800); } catch (e) { /* too big to cache */ }
-    return out;
+    items.sort(function (a, b) { return (b.at || 0) - (a.at || 0); });
+    return items;
+  },
+
+  /** A price or quote page rather than news: "GOLDBEES Share Price Today - … Live NSE/BSE - Univest", "… stock price, news, quote and history". */
+  quotePage: function (title) {
+    var t = String(title).replace(/\s+[-–—|]\s+[^-–—|]+$/, '').trim(); // without the " - Source" at the end
+    return /\b(share|stock) price( today| live| \(\w+\))?$/i.test(t) ||
+      /(\bnse\/bse\b|\bquote and history\b|\bstock price,? news\b|\bprice (&|and) charts?\b|\bnav, reviews\b|\blive (nse|bse)\b|\bshare price today\s+[-–—|]|\bstock price live\b)/i.test(t);
   },
 
   /** Save settings changed in the app. Only these keys can be changed, each checked. */

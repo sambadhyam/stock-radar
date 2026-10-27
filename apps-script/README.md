@@ -269,6 +269,13 @@ Every `.gs` file changed and there is one new file. `appsscript.json` is unchang
 
 That's all. The schedule keeps running, and the backtest starts by itself after the next close.
 
+## Update 0.6.1: cleaner news (one file)
+
+News in a stock's sheet now leaves out price and quote pages ("… Share Price - Groww") and anything older than four months, searches the last 30 days first, and lists the newest first. AI summaries use the same headlines.
+
+1. Paste [Api.gs](https://raw.githubusercontent.com/sambadhyam/stock-radar/main/apps-script/Api.gs) → `Api`, and save.
+2. Publish the web app again: **Deploy → Manage deployments → ✏️ → Version: New version → Deploy**.
+
 ## Backtests
 
 The engine replays history through exactly the rules of the live paper record (same strategy code, fills, exits and Zerodha charges) and sends a **🧪 Backtest Baseline** report to Telegram and email. The numbers also go into the **Backtests** sheet, the **Reports** list and the app (More → Backtest lab, and each strategy card in Results).
