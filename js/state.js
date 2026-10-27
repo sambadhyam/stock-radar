@@ -1,7 +1,19 @@
 // state.js — user settings, kept on this phone. When the engine is connected, its settings win and are saved there too.
 import { store } from './util.js';
 
-export const APP_VERSION = '0.6.1';
+export const APP_VERSION = '0.6.2';
+/** The oldest engine (SR_VERSION in Data.gs) whose settings and data this app fully understands. */
+export const ENGINE_NEEDED = '0.6.0';
+
+/** True when version a (like "0.5.1") is older than version b. */
+export function olderVersion(a, b) {
+  const x = String(a || '0').split('.').map(Number), y = String(b || '0').split('.').map(Number);
+  for (let i = 0; i < Math.max(x.length, y.length); i++) {
+    const d = (x[i] || 0) - (y[i] || 0);
+    if (d) return d < 0;
+  }
+  return false;
+}
 
 export const DEFAULTS = Object.freeze({
   theme: 'system',          // 'system' | 'light' | 'dark'

@@ -122,13 +122,13 @@ export function outcomeLabel(state) { return t(OUTCOME_KEY[state] || 'legend.fla
 
 // ---------- Toast ----------
 let toastTimer;
-export function toast(msg) {
+export function toast(msg, ms = 2600) {
   const el = document.getElementById('toast');
   if (!el) return;
   el.textContent = msg;
   el.classList.add('show');
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => el.classList.remove('show'), 2600);
+  toastTimer = setTimeout(() => el.classList.remove('show'), ms);
 }
 
 // ---------- Bottom sheet (Android back button closes it) ----------

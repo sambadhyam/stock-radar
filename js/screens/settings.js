@@ -2,12 +2,31 @@
 import { h, icon, fmt } from '../util.js';
 import { t } from '../i18n.js';
 import { ICONS } from '../icons.js';
-import { getSettings, saveSettings, LIMITS } from '../state.js';
+import { getSettings, saveSettings, LIMITS, ENGINE_NEEDED, olderVersion } from '../state.js';
 import { screenHead, segmented, toast } from '../ui.js';
 import { api, isConnected, validUrl, validToken } from '../api.js';
 import { refresh, clearLive } from '../data.js';
 
 const SYMBOL_RE = /^[A-Z0-9&-]{1,20}$/;
+
+/** Each saved setting's label, to say which ones the engine did not keep. */
+const LABELS = {
+  realCapital: 'settings.realCap', paperCapital: 'settings.paperCap', riskPct: 'settings.risk', maxPerStockPct: 'settings.maxStock',
+  watchlist: 'settings.watchlist', telegram: 'settings.telegram', emailDigest: 'settings.email', paperAlerts: 'settings.paperAlerts',
+  intradayFollowNifty: 'settings.followNifty', intradayBlockBuysInBear: 'settings.blockBuysBear', intradayBlockShortsInBull: 'settings.blockShortsBull',
+  intradayOneAlertPerStock: 'settings.onePerStock', portfolioMaxStockPct: 'settings.pfStock', portfolioMaxSectorPct: 'settings.pfSector',
+  backtestYears: 'settings.btYears', intradayHistoryDays: 'settings.btDays', backtestMinutesPerDay: 'settings.btMins', aiSummaries: 'settings.ai',
+};
+
+/** Settings the engine's answer does not confirm: it is running older code that does not know them. */
+function notKept(patch, res) {
+  if (!res || typeof res !== 'object') return [];
+  return Object.keys(patch).filter((k) => {
+    if (k === 'watchlist') return Array.isArray(res.watchlist) && res.watchlist.join() !== patch.watchlist.join();
+    if (res[k] === undefined || res[k] === null) return true;
+    return typeof patch[k] === 'number' ? Number(res[k]) !== patch[k] : res[k] !== patch[k];
+  });
+}
 
 function numberField({ id, label, hint, value, pre, post, step = 'any', money = false }) {
   const input = h('input', {
@@ -146,14 +165,21 @@ export function render({ data, rerender }) {
     saveSettings({ ...patch, strategiesOff: [...off] });
     if (!connected) { toast(t('settings.saved')); return; }
     try {
-      await api.saveSettings(patch, { off: [...off] });
-      toast(t('settings.savedEngine') + (watchChanged ? '. ' + t('settings.watchLater') : ''));
+      const res = await api.saveSettings(patch, { off: [...off] });
+      const lost = notKept(patch, res);
+      if (lost.length) toast(t('settings.notKept', { list: lost.map((k) => t(LABELS[k] || k)).join(', ') }), 10000);
+      else toast(t('settings.savedEngine') + (watchChanged ? '. ' + t('settings.watchLater') : ''));
       refresh();
     } catch (e) { toast(t('settings.saveFailed', { why: e.message })); }
   };
 
+  // An engine older than this app ignores the newer settings: say so before they are lost on saving.
+  const oldEngine = connected && data.version && olderVersion(data.version, ENGINE_NEEDED)
+    ? h('div', { class: 'banner warn-banner', role: 'alert', style: { marginBottom: '14px' } }, h('span', null, t('settings.engineOld', { v: data.version, need: ENGINE_NEEDED }))) : null;
+
   return h('div', null,
     screenHead(t('settings.title'), connected ? t('settings.sub') : t('settings.subLocal'), '#/more'),
+    oldEngine,
     h('section', { class: 'form-sec' }, h('h2', null, t('settings.money')), real.el, paper.el, risk.el, maxStock.el),
     h('section', { class: 'form-sec' },
       h('h2', null, t('settings.watchlist')),

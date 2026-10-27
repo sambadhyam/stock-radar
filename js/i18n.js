@@ -320,6 +320,8 @@ const en = {
   'settings.connHint': 'Easiest: in the sheet use Stock Radar → Connect the app, then open the link it sends to Telegram on this phone.',
   'settings.connect': 'Connect', 'settings.disconnect': 'Disconnect',
   'settings.connected': 'Connected to the engine (version {v})',
+  'settings.notKept': 'Saved, but your engine did not keep: {list}. It is running older code. In Apps Script, paste the latest Data.gs, then publish a new version (Deploy → Manage deployments → ✏️ → Version: New version → Deploy).',
+  'settings.engineOld': 'Your engine is on version {v}, but this app needs {need} or newer, so some settings will not stick. Paste the latest engine files in Apps Script (Data.gs especially), then publish a new version: Deploy → Manage deployments → ✏️ → Version: New version → Deploy.',
   'settings.connFail': 'Could not connect: {why}',
   'settings.disconnected': 'Disconnected. The app shows sample data again.',
   'settings.connBad': 'The web app URL ends with /exec and the token is a long code. Check both.',

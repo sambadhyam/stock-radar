@@ -1445,6 +1445,9 @@ test('AI summaries: off by default, need a key, label-free text in, three bullet
   eq(post(G, { a: 'bundle', t: token }).data.ai.enabled, false);
   eq(post(G, { a: 'settings', t: token, settings: { aiSummaries: true } }).ok, true);
   G.Config._cache = null;
+  const after = post(G, { a: 'bundle', t: token }).data;
+  eq(after.settings.aiSummaries, true, 'the switch stays on in the next bundle');
+  eq(after.ai.enabled, true);
   const nokey = post(G, { a: 'summary', t: token, symbol: 'RELIANCE' });
   ok(!nokey.ok && /Set up keys/.test(nokey.error), nokey.error);
   eq(G.saveSecretsFromDialog({ GEMINI_API_KEY: GEMINI_KEY }).errors.length, 0);
