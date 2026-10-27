@@ -1,4 +1,4 @@
-// More: menu plus the simpler pages (portfolio, backtest lab, about).
+// More: the menu, plus the About page. Portfolio, Backtest lab and Fundamentals have their own screens.
 import { h, icon } from '../util.js';
 import { t } from '../i18n.js';
 import { ICONS } from '../icons.js';
@@ -15,6 +15,7 @@ export function render({ data }) {
   const list = h('ul', { class: 'list menu' },
     item('#/portfolio', 'portfolio', t('more.portfolio'), t('more.portfolioSub')),
     item('#/backtest', 'backtest', t('more.backtest'), t('more.backtestSub')),
+    item('#/fundamentals', 'fund', t('more.fund'), t('more.fundSub')),
     item('#/settings', 'settings', t('more.settings'), t('more.settingsSub')),
     item('#/about', 'about', t('more.about'), t('more.aboutSub')));
   list.querySelectorAll('.row > svg:last-child').forEach((el) => el.classList.add('chev'));
@@ -23,25 +24,6 @@ export function render({ data }) {
     screenHead(t('more.title')),
     list,
     h('p', { class: 'foot' }, t('more.version', { v: APP_VERSION }) + ' ' + (isConnected() && !data.isDemo ? t('more.connected') : t('more.notConnected'))));
-}
-
-export function renderPortfolio() {
-  return h('div', null,
-    screenHead(t('portfolio.title'), null, '#/more'),
-    h('div', { class: 'empty' },
-      h('h2', null, t('portfolio.emptyTitle')),
-      h('p', null, t('portfolio.emptyBody')),
-      h('button', { type: 'button', class: 'btn btn-primary', disabled: true }, t('portfolio.import')),
-      h('p', { class: 'note faint', style: { marginTop: '10px' } }, t('common.comingPhase', { n: 5 }))));
-}
-
-export function renderBacktest() {
-  return h('div', null,
-    screenHead(t('backtest.title'), null, '#/more'),
-    h('div', { class: 'empty' },
-      h('h2', null, t('backtest.emptyTitle')),
-      h('p', null, t('backtest.emptyBody')),
-      h('p', { class: 'note faint' }, t('common.comingPhase', { n: 5 }))));
 }
 
 export function renderAbout() {

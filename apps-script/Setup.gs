@@ -4,7 +4,7 @@
  *
  * Use the menu in this order the first time:
  *   1. Create sheets   2. Set up keys   3. Run all tests   4. Load stock lists   5. Start daily schedule
- *   6. Load price history
+ *   6. Load price history   7. Backtest (Phase 5: long history and the Backtest Baseline report)
  */
 
 /** Adds the Stock Radar menu whenever the sheet is opened. */
@@ -16,6 +16,7 @@ function onOpen() {
     .addItem('4. Load stock lists', 'loadSymbols')
     .addItem('5. Start daily schedule', 'installSchedule')
     .addItem('6. Load price history', 'loadHistory')
+    .addItem('7. Backtest', 'menuBacktest')
     .addSeparator()
     .addItem('Status', 'showStatus')
     .addItem('Update paper results now', 'updatePaperResults')
@@ -39,9 +40,9 @@ function sheetSchemas_() {
   { name: 'Strategies', headers: ['id', 'name', 'horizon', 'enabled', 'status', 'override', 'trades', 'wins', 'losses', 'flats', 'winRatePct', 'avgNetPct', 'profitFactor', 'maxDrawdownPct', 'alphaPct', 'updatedAt', 'statusSince'].concat(Review.STRAT_EXTRA) },
   { name: 'Checkpoints', headers: ['alertId', 'symbol', 'label', 'dueDate', 'price', 'returnPct', 'niftyReturnPct', 'alphaPct', 'evaluatedAt'].concat(Review.CHECK_EXTRA) },
   { name: 'Metrics', headers: Review.METRIC_HEADERS },
-  { name: 'Holdings', headers: ['symbol', 'qty', 'avgPrice', 'lastPrice', 'sector', 'importedAt'] },
+  { name: 'Holdings', headers: Portfolio.COLS, textCols: [7, 9] },
   { name: 'Fundamentals', headers: ['symbol', 'roePct', 'rocePct', 'debtToEquity', 'sales3yPct', 'profit3yPct', 'promoterPct', 'pledgePct', 'pe', 'pe5yMedian', 'fcf', 'source', 'updatedAt'] },
-  { name: 'Backtests', headers: ['runId', 'strategy', 'horizon', 'from', 'to', 'symbols', 'trades', 'winRatePct', 'avgNetPct', 'profitFactor', 'maxDrawdownPct', 'cagrPct', 'createdAt'] },
+  { name: 'Backtests', headers: ['runId', 'strategy', 'horizon', 'from', 'to', 'symbols', 'trades', 'winRatePct', 'avgNetPct', 'profitFactor', 'maxDrawdownPct', 'cagrPct', 'createdAt', 'days', 'alphaPct', 'verdict', 'blockedTrades', 'blockedAvgPct'], textCols: [1, 4, 5] },
   { name: 'Reports', headers: ['id', 'type', 'createdAt', 'title', 'summary', 'payload'] },
   { name: 'HealthLog', headers: ['time', 'job', 'source', 'result', 'ms', 'items', 'detail'], widths: [150, 110, 90, 70, 70, 60, 420] },
   { name: 'ErrorLog', headers: ['time', 'job', 'message', 'stack'], widths: [150, 110, 420, 300] },
@@ -390,6 +391,7 @@ function installSchedule() {
 
 function removeSchedule() {
   Schedule.remove();
+  Backtest.unschedule();
   Ui.alert('Daily schedule is off', 'No more automatic runs. Use Stock Radar → 5. Start daily schedule to turn it back on.');
 }
 
@@ -438,6 +440,22 @@ var Setup = {
     try { s = JSON.parse(Secrets.props().getProperty('PAPER_SUMMARY') || 'null'); } catch (e) { s = null; }
     if (!s) return 'No results yet (the first are judged after the next close)';
     return s.closed + ' closed, net ' + Fmt.money(s.netPnl, 0) + ' (' + Fmt.pct(s.returnPct) + '), ' + s.open + ' open' + (s.start ? ', since ' + Fmt.day(s.start) : '');
+  },
+
+  backtestLine: function () {
+    var b = Backtest.info();
+    if (b.state === 'running') return 'Running: ' + b.note;
+    if (b.state === 'failed') return 'Stopped: ' + b.error + '. Run 7. Backtest again.';
+    if (!b.summary) return 'Not run yet: Stock Radar → 7. Backtest (it also starts by itself after the next close)';
+    var s = b.summary;
+    return 'Last run ' + Utilities.formatDate(new Date(s.at), IST, 'd MMM') + ': ' + s.daily.symbols + ' stocks, ' + s.daily.from.slice(0, 4) + '–' + s.daily.to.slice(0, 4) + '; intraday ' + s.intraday.sessions + ' sessions';
+  },
+
+  holdingsLine: function () {
+    var v = null;
+    try { v = Portfolio.view(); } catch (e) { v = null; }
+    if (!v) return 'None imported (import from the app: More → Portfolio)';
+    return v.holdings.length + ' stocks, value ' + Fmt.money(v.totals.value, 0) + ' (' + Fmt.pct(v.totals.pnlPct) + ')';
   },
 
   regimeLine: function () {
@@ -545,6 +563,9 @@ var Setup = {
       li('Market regime', Setup.regimeLine()) +
       li('Strategies on', String(StrategyBook.enabled(['INTRADAY', 'SWING', 'MEDIUM', 'LONG']).length) + ' of ' + SRCore.STRATEGIES.length) +
       li('Paper trading', Setup.paperLine()) +
+      li('Backtest', Setup.backtestLine()) +
+      li('Holdings', Setup.holdingsLine()) +
+      li('AI summaries', AiSummary.status().enabled ? (AiSummary.status().key ? 'On (' + AiSummary.status().model + ')' : 'On, but no Gemini key yet: 2. Set up keys') : 'Off') +
       li('Emails left today', String(MailApp.getRemainingDailyQuota())) +
       li('App connection', Secrets.get('WEBAPP_URL') ? 'Web app address saved; use Connect the app to send the link again' : 'Not set up yet: Stock Radar → Connect the app') +
       '</table><h3>Last runs</h3><table>' + (jobRows || li('No runs yet', 'They appear after the schedule starts')) + '</table></body></html>';

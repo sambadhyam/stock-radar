@@ -106,7 +106,7 @@ var Review = {
    * Fill in an alert row from a simulated trade. ctx: {intraday, nowMs, niftyPct(fromT, toT, fillT), toDate(t)}
    */
   apply: function (r, s, ctx) {
-    var self = this, sz = this.sizing();
+    var sz = this.sizing();
     r._dirty = true;
     r.evaluatedAt = new Date(ctx.nowMs);
     r.status = s.state;
@@ -119,23 +119,18 @@ var Review = {
     ['paperQty', 'grossPnl', 'charges', 'netPnl', 'netPct', 'niftyPct', 'alphaPct', 'holdDays'].forEach(function (k) { r[k] = ''; });
     r._mark = ''; r._unrealised = '';
     if (s.fillPrice === null) return r;
-    var size = SRCore.positionSize(sz.capital, sz.riskPct, s.fillPrice, Number(r.stop), sz.maxPer);
-    r.paperQty = size.qty;
-    var price = s.state === 'CLOSED' ? s.exitPrice : s.lastPrice;
-    // Percent results use at least one share, so a stock too pricey for the virtual account still counts in the stats.
-    var res = SRCore.tradeResult(r.direction, Math.max(size.qty, 1), s.fillPrice, price, ctx.intraday, this.rates());
+    // Sizing, charges and the net result come from Core.gs, so the backtester uses exactly the same maths.
+    var p = SRCore.paperResult(r.direction, Number(r.stop), s, sz, this.rates(), ctx.intraday);
+    r.paperQty = p.qty;
     if (s.state !== 'CLOSED') {
-      if (size.qty > 0) { r._mark = price; r._unrealised = SRCore.tradeResult(r.direction, size.qty, s.fillPrice, price, ctx.intraday, this.rates()).netPnl; }
+      if (p.mark !== null) { r._mark = p.mark; r._unrealised = p.unrealised; }
       return r;
     }
-    r.netPct = res.netPct === null ? '' : res.netPct;
-    if (size.qty > 0) {
-      var real = SRCore.tradeResult(r.direction, size.qty, s.fillPrice, s.exitPrice, ctx.intraday, this.rates());
-      r.grossPnl = real.grossPnl; r.charges = real.charges; r.netPnl = real.netPnl;
-    }
+    r.netPct = p.netPct === null ? '' : p.netPct;
+    if (p.netPnl !== null) { r.grossPnl = p.grossPnl; r.charges = p.charges; r.netPnl = p.netPnl; }
     var nifty = ctx.niftyPct(s.fillT, s.exitT);
     if (this.num(nifty)) { r.niftyPct = this.round(nifty, 3); if (this.num(r.netPct)) r.alphaPct = this.round(r.netPct - nifty, 3); }
-    r.holdDays = ctx.intraday ? self.round((s.exitT - s.fillT) / 60000 / 375, 3) : s.bars;
+    r.holdDays = p.holdDays;
     return r;
   },
 

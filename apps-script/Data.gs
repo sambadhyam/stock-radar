@@ -6,7 +6,7 @@
  * This file holds no keys. Keys are saved privately with  Stock Radar → 2. Set up keys.
  */
 
-var SR_VERSION = '0.5.1';
+var SR_VERSION = '0.6.0';
 var IST = 'Asia/Kolkata';
 
 /* =============================== Settings =============================== */
@@ -50,6 +50,15 @@ var CONFIG_DEFAULTS = [
   ['maxTelegramAlertsPerDay', 40, 'Most alert messages sent in one day; everything is still logged in the Alerts sheet'],
   ['historyDays', 660, 'Calendar days of daily candles loaded per stock (about 450 trading days)'],
   ['heartbeatMinutes', 5, 'How often the engine records a market snapshot during the session'],
+  ['backtestUniverse', 'NIFTY200', 'Stocks the backtester tests the daily strategies on (NIFTY50, NIFTY200 or NIFTY500)'],
+  ['backtestYears', 10, 'Years of daily history loaded for backtests (Angel One may have less for some stocks)'],
+  ['intradayHistoryDays', 60, 'Sessions of 5-minute history kept for intraday backtests'],
+  ['backtestRefreshDays', 30, 'Run the backtest again on a Saturday once the last run is this many days old'],
+  ['backtestMinutesPerDay', 30, 'Most trigger minutes the backtest uses on a trading day (twice this on other days), so the engine stays within Google\'s 90 minutes a day'],
+  ['portfolioMaxStockPct', 20, 'Warn when one holding is more than this percent of your portfolio'],
+  ['portfolioMaxSectorPct', 35, 'Warn when one sector is more than this percent of your portfolio'],
+  ['aiSummaries', false, 'Show AI news summaries (Gemini) in the app; needs a Gemini API key in 2. Set up keys'],
+  ['aiModel', 'gemini-3.5-flash-lite', 'Gemini model used for AI summaries'],
   ['muhuratTrading', false, 'Run the engine in special weekend Muhurat sessions'],
   ['chargeBrokerageIntradayPct', 0.03, 'Zerodha intraday brokerage, percent per executed order'],
   ['chargeBrokerageIntradayMax', 20, 'Zerodha intraday brokerage cap per executed order, rupees'],
@@ -219,7 +228,7 @@ var SECRET_FIELDS = [
   { key: 'ANGEL_TOTP_SECRET', label: 'TOTP secret key', pattern: /^[A-Z2-7]{16,}$/, hint: 'The text key shown with the QR code when you enabled TOTP', required: true, secret: true },
   { key: 'TG_BOT_TOKEN', label: 'Telegram bot token', pattern: /^\d{5,}:[A-Za-z0-9_-]{30,}$/, hint: 'From @BotFather, like 123456789:AAE…', required: true, secret: true },
   { key: 'TG_CHAT_ID', label: 'Telegram chat ID', pattern: /^-?\d{4,}$/, hint: 'Numbers only, from the getUpdates page', required: true, secret: false },
-  { key: 'GEMINI_API_KEY', label: 'Gemini API key (optional)', pattern: /^[A-Za-z0-9_-]{20,}$/, hint: 'Only needed for AI news summaries later', required: false, secret: true },
+  { key: 'GEMINI_API_KEY', label: 'Gemini API key (optional)', pattern: /^[A-Za-z0-9._-]{20,}$/, hint: 'For AI news summaries in the app. Get one at aistudio.google.com → Get API key', required: false, secret: true },
 ];
 
 var Secrets = {

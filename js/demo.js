@@ -326,8 +326,50 @@ const FUNDAMENTALS = {
   HDFCBANK: { roe: 17.1, roce: null, de: null, sales3y: 19.8, profit3y: 15.2, promoter: 0, pledge: 0, pe: 18.9, pe5y: 21.4, fcf: 'Positive' },
 };
 
+// ---------- Backtest lab (design preview only: made-up numbers that only show the layout) ----------
+const LAB_HZ = { swing: 'SWING', medium: 'MEDIUM', intraday: 'INTRADAY' };
+function demoCurve(seed, avg, months) {
+  let x = seed, v = 100000;
+  const t0 = Date.parse('2016-11-01T15:30:00+05:30'), pts = [{ t: t0, v }];
+  for (let i = 1; i <= months; i++) {
+    x = (x * 16807) % 2147483647;
+    v = Math.max(55000, v + (x / 2147483647 - 0.5) * 3800 + avg * 700);
+    pts.push({ t: t0 + i * 30.44 * 86400000, v: Math.round(v) });
+  }
+  return pts;
+}
+const LAB = {
+  info: { state: 'done', note: '' },
+  lists: { nifty50: [], universe: [], universeName: 'Nifty 200', watchlist: [], intraday: [] },
+  paramInfo: [],
+  result: {
+    runId: 'demo', at: at(S, '19:40'), capital: 100000, universe: 'Nifty 200',
+    daily: { from: '2016-11-01', to: '2026-10-23', symbols: 198 }, intraday: { from: '2026-07-28', to: '2026-10-23', sessions: 60, symbols: 50 },
+    strategies: Object.fromEntries(STRATEGIES.filter((st) => LAB_HZ[st.horizon]).map((st, k) => {
+      const b = st.backtest, intra = st.horizon === 'intraday', trades = intra ? 180 + k * 40 : 300 + k * 97;
+      const verdict = trades < 30 ? 'few' : b.avg <= 0 ? 'loses' : b.pf >= 1.3 ? 'good' : 'thin';
+      const won = Math.round(trades * b.win / 100), pnl = Math.round(trades * b.avg * (intra ? 9 : 11));
+      return [st.id, {
+        name: st.name, horizon: LAB_HZ[st.horizon], verdict, cagrPct: intra ? null : Math.round(b.avg * 4.2 * 10) / 10, maxOpen: intra ? 6 : 14,
+        metrics: { trades, days: Math.round(trades * 0.8), wins: won, losses: trades - won, winRatePct: b.win, expectancyPct: b.avg, profitFactor: b.pf, maxDrawdownPct: -b.dd,
+          avgWinPct: Math.round(b.avg * 3.1 * 100) / 100 || 1.1, avgLossPct: -Math.round(Math.abs(b.avg) * 2.2 * 100) / 100 || -0.9, avgHoldDays: intra ? 0.21 : 6.4, avgAlphaPct: Math.round(b.avg * 40) / 100,
+          totalNetPnl: pnl, returnPct: Math.round(pnl / 1000) / 100 },
+        regimes: { BULL: { trades: Math.round(trades * 0.55), winRatePct: b.win + 3, expectancyPct: b.avg + 0.1 }, NEUTRAL: { trades: Math.round(trades * 0.3), winRatePct: b.win - 2, expectancyPct: b.avg - 0.05 }, BEAR: { trades: Math.round(trades * 0.15), winRatePct: b.win - 9, expectancyPct: b.avg - 0.4 } },
+        years: intra ? { 2026: { trades, winRatePct: b.win, expectancyPct: b.avg, totalNetPnl: pnl } } : Object.fromEntries([2022, 2023, 2024, 2025, 2026].map((y, i) => [String(y), { trades: Math.round(trades / 10), winRatePct: b.win + (i % 2 ? 4 : -3), expectancyPct: b.avg + (i % 2 ? 0.2 : -0.15), totalNetPnl: Math.round(pnl / 10 + (i % 2 ? 900 : -700)) }])),
+        curve: demoCurve(31 + k * 17, b.avg, intra ? 3 : 120), sample: [], shadow: { trades: 0 },
+      }];
+    })),
+    filter: [{ horizon: 'SWING', filter: 'regime', blocked: 1240, blockedAvg: -0.21, taken: 2310, takenAvg: 0.44 }],
+  },
+};
+
 export const demo = {
   isDemo: true,
+  lab: LAB,
+  backtest: { state: 'done' },
+  ai: { enabled: false, key: false },
+  portfolio: null,
+  params: {},
   asOf: at(S, '15:30'),
   session: S,
   market: { regime: 'bull', nifty: 25410.2, niftyChg: 0.62, vix: 12.4, vixChg: -3.1, breadth: 64 },

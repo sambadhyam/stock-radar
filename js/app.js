@@ -12,6 +12,9 @@ import * as results from './screens/results.js';
 import * as more from './screens/more.js';
 import * as settings from './screens/settings.js';
 import * as connect from './screens/connect.js';
+import * as lab from './screens/lab.js';
+import * as portfolio from './screens/portfolio.js';
+import * as fundamentals from './screens/fundamentals.js';
 
 const ROUTES = {
   home: { tab: 'home', render: home.render },
@@ -20,8 +23,9 @@ const ROUTES = {
   results: { tab: 'results', render: results.render },
   more: { tab: 'more', render: more.render },
   settings: { tab: 'more', render: settings.render },
-  portfolio: { tab: 'more', render: more.renderPortfolio },
-  backtest: { tab: 'more', render: more.renderBacktest },
+  portfolio: { tab: 'more', render: portfolio.render },
+  backtest: { tab: 'more', render: lab.render },
+  fundamentals: { tab: 'more', render: fundamentals.render },
   about: { tab: 'more', render: more.renderAbout },
   connect: { tab: 'more', render: connect.render },
 };

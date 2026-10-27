@@ -197,6 +197,7 @@ var Engine = {
       { key: 'evi', job: 'evaluateIntraday', run: function () { return Review.intraday(today, day, deadline); } },
       { key: 'evd', job: 'evaluateDaily', run: function () { Review.daily(today); return 'done'; } },
       { key: 'scan', job: 'endOfDayScan', run: function () { var r = Scans.endOfDay(today, day); day.eodScan = { scanned: r.scanned || 0, signals: r.signals || 0 }; return 'done'; } },
+      { key: 'hold', job: 'holdings', run: function () { day.holdings = Portfolio.value(); Portfolio.taxNotes(); return 'done'; } },
       { key: 'sum', job: 'endOfDay', run: function () { self.endOfDay(today, day); return 'done'; } },
     ];
     day.eodStep = day.eodStep || 0;
@@ -332,6 +333,7 @@ var Engine = {
     lines = lines.concat(this.signalLines(today, day));
     lines.push('');
     try { lines = lines.concat(Review.paperLines(today)); } catch (e) { ErrorLog.add('paperLines', e); lines.push('Paper results could not be read: ' + Notify.esc(Secrets.mask(e.message))); }
+    try { lines = lines.concat(this.holdingLines()); } catch (e) { ErrorLog.add('holdingLines', e); }
     var errors = ErrorLog.countToday();
     var source = snap.sources.indexOf('angel') >= 0 ? 'Data from Angel One.' : 'Data from backups only (' + snap.sources.join(', ') + '), Angel One did not answer.';
     lines.push('', 'Engine: ' + (day.hbCount || 0) + ' market checks today, ' + (errors ? errors + ' error' + (errors > 1 ? 's' : '') + ' logged (see the ErrorLog sheet).' : 'no errors.') + ' ' + source);
@@ -346,6 +348,22 @@ var Engine = {
     Store.trim('HealthLog', 3000);
     Store.trim('ErrorLog', 1000);
     try { Review.readinessIfDue(today); } catch (e) { ErrorLog.add('readiness', e); }
+    try { Backtest.autoStart(); } catch (e) { ErrorLog.add('backtestStart', e); } // the first Backtest Baseline, in the evening
+  },
+
+  /** Your imported holdings in the closing summary: today's change and anything that needs a look. */
+  holdingLines: function () {
+    var v = Portfolio.view();
+    if (!v) return [];
+    var L = ['', '<b>Your holdings</b>: ' + Fmt.money(v.totals.value, 0) + ' · today ' + Fmt.money(v.totals.dayPnl, 0) + ' (' + Fmt.pct(v.totals.dayPct) + ') · overall ' + Fmt.pct(v.totals.pnlPct)];
+    var names = { below200: 'below its 200-day average', trail: 'under its trailing stop', stop: 'at or under your stop-loss', target: 'at or above your target', ltSoon: 'turns 12 months soon' };
+    v.holdings.filter(function (h) { return h.flags.length; }).slice(0, 8).forEach(function (h) {
+      L.push('• ' + Notify.esc(h.symbol) + ': ' + h.flags.map(function (f) { return names[f] || f; }).join(', '));
+    });
+    v.warnings.slice(0, 3).forEach(function (w) {
+      L.push('• ' + (w.kind === 'stock' ? Notify.esc(w.symbol) + ' is ' + w.pct + '% of your portfolio (limit ' + w.limit + '%)' : Notify.esc(w.sector) + ' is ' + w.pct + '% of your portfolio (limit ' + w.limit + '%)'));
+    });
+    return L;
   },
 
   /** The closing summary's section on today's signals. */
@@ -375,9 +393,11 @@ var Engine = {
     return out;
   },
 
-  /** Saturday: Live-ready / Rejected decisions and the weekly report (Review.gs). */
+  /** Saturday: Live-ready / Rejected decisions and the weekly report (Review.gs), then a monthly backtest refresh when due. */
   weekly: function () {
-    return Review.weekly();
+    var r = Review.weekly();
+    try { Backtest.weeklyCheck(); } catch (e) { ErrorLog.add('backtestRefresh', e); }
+    return r;
   },
 
   /** In December, remind once a week to add next year's NSE holidays. */

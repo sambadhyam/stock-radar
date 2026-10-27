@@ -1,7 +1,7 @@
 // state.js — user settings, kept on this phone. When the engine is connected, its settings win and are saved there too.
 import { store } from './util.js';
 
-export const APP_VERSION = '0.5.1';
+export const APP_VERSION = '0.6.0';
 
 export const DEFAULTS = Object.freeze({
   theme: 'system',          // 'system' | 'light' | 'dark'
@@ -17,6 +17,12 @@ export const DEFAULTS = Object.freeze({
   intradayBlockBuysInBear: false,  // no intraday buys on Bear-regime days
   intradayBlockShortsInBull: false,// no intraday shorts on Bull-regime days
   intradayOneAlertPerStock: true,  // one intraday alert per stock per day
+  portfolioMaxStockPct: 20, // warn when one holding is above this share of the portfolio
+  portfolioMaxSectorPct: 35,// warn when one sector is above this share
+  backtestYears: 10,        // years of daily history the engine loads for backtests
+  intradayHistoryDays: 60,  // sessions of 5-minute history kept for intraday backtests
+  backtestMinutesPerDay: 30,// most trigger minutes the backtest uses in 24 hours (Google allows 90 in all)
+  aiSummaries: false,       // AI news summaries (Gemini key needed in the sheet)
   strategiesOff: [],        // strategy ids switched off
   backendUrl: '',
   token: '',
@@ -27,6 +33,11 @@ export const LIMITS = Object.freeze({
   paperCapital: [1000, 1e10],
   riskPct: [0.1, 5],
   maxPerStockPct: [1, 100],
+  portfolioMaxStockPct: [5, 100],
+  portfolioMaxSectorPct: [10, 100],
+  backtestYears: [3, 15],
+  intradayHistoryDays: [20, 120],
+  backtestMinutesPerDay: [10, 40],
   watchlistMax: 10,
 });
 

@@ -47,6 +47,13 @@ export function render({ data, rerender }) {
   const paper = numberField({ id: 'f-paper', label: t('settings.paperCap'), hint: t('settings.paperCapHint'), value: s.paperCapital, pre: '₹', step: '1000', money: true });
   const risk = numberField({ id: 'f-risk', label: t('settings.risk'), hint: t('settings.riskHint'), value: s.riskPct, post: '%', step: '0.1' });
   const maxStock = numberField({ id: 'f-max', label: t('settings.maxStock'), hint: t('settings.maxStockHint'), value: s.maxPerStockPct, post: '%', step: '1' });
+  const pfStock = numberField({ id: 'f-pf-stock', label: t('settings.pfStock'), hint: t('settings.pfStockHint'), value: s.portfolioMaxStockPct, post: '%', step: '1' });
+  const pfSector = numberField({ id: 'f-pf-sector', label: t('settings.pfSector'), hint: t('settings.pfSectorHint'), value: s.portfolioMaxSectorPct, post: '%', step: '1' });
+  const btYears = numberField({ id: 'f-bt-years', label: t('settings.btYears'), hint: t('settings.btYearsHint'), value: s.backtestYears, step: '1' });
+  const btDays = numberField({ id: 'f-bt-days', label: t('settings.btDays'), hint: t('settings.btDaysHint'), value: s.intradayHistoryDays, step: '1' });
+  const btMins = numberField({ id: 'f-bt-mins', label: t('settings.btMins'), hint: t('settings.btMinsHint'), value: s.backtestMinutesPerDay, post: t('settings.minUnit'), step: '1' });
+  const ai = data.ai || {};
+  const aiSw = switchRow('f-ai', t('settings.ai'), connected ? (ai.key ? t('settings.aiKey', { model: ai.model || 'Gemini' }) : t('settings.aiNoKey')) : t('settings.aiSub'), !!s.aiSummaries);
 
   // Watchlist
   const tags = h('div', { class: 'tags' });
@@ -114,6 +121,8 @@ export function render({ data, rerender }) {
   const save = async () => {
     const checks = [
       [real.input, LIMITS.realCapital], [paper.input, LIMITS.paperCapital], [risk.input, LIMITS.riskPct], [maxStock.input, LIMITS.maxPerStockPct],
+      [pfStock.input, LIMITS.portfolioMaxStockPct], [pfSector.input, LIMITS.portfolioMaxSectorPct], [btYears.input, LIMITS.backtestYears], [btDays.input, LIMITS.intradayHistoryDays],
+      [btMins.input, LIMITS.backtestMinutesPerDay],
     ];
     let ok = true;
     for (const [input, [min, max]] of checks) {
@@ -129,6 +138,10 @@ export function render({ data, rerender }) {
       watchlist: watch, telegram: tg.input.checked, emailDigest: em.input.checked, paperAlerts: pa.input.checked,
     };
     INTRA.forEach((r) => { patch[r.key] = r.input.checked; });
+    patch.portfolioMaxStockPct = Number(pfStock.input.value); patch.portfolioMaxSectorPct = Number(pfSector.input.value);
+    patch.backtestYears = Math.round(Number(btYears.input.value)); patch.intradayHistoryDays = Math.round(Number(btDays.input.value));
+    patch.backtestMinutesPerDay = Math.round(Number(btMins.input.value));
+    patch.aiSummaries = aiSw.input.checked;
     const watchChanged = watch.join() !== s.watchlist.join();
     saveSettings({ ...patch, strategiesOff: [...off] });
     if (!connected) { toast(t('settings.saved')); return; }
@@ -155,6 +168,18 @@ export function render({ data, rerender }) {
       h('h2', null, t('settings.intraday')),
       h('p', { class: 'sec-note' }, t('settings.intradayNote')),
       INTRA.map((r) => r.el)),
+    h('section', { class: 'form-sec' },
+      h('h2', null, t('settings.portfolio')),
+      h('p', { class: 'sec-note' }, t('settings.portfolioNote')),
+      pfStock.el, pfSector.el),
+    h('section', { class: 'form-sec' },
+      h('h2', null, t('settings.backtest')),
+      h('p', { class: 'sec-note' }, t('settings.backtestNote')),
+      btYears.el, btDays.el, btMins.el),
+    h('section', { class: 'form-sec' },
+      h('h2', null, t('settings.aiTitle')),
+      aiSw.el,
+      h('p', { class: 'note faint', style: { marginTop: '6px' } }, t('settings.aiNote'))),
     h('section', { class: 'form-sec' },
       h('h2', null, t('settings.strategies')),
       h('p', { class: 'sec-note' }, t('settings.strategiesSub')),

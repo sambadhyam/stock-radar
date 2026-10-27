@@ -171,7 +171,8 @@ export function candleChart({ candles, levels = {}, overlays = [], mode = 'day',
  * Equity curve against starting capital.
  * @param {{t:number,v:number}[]} points
  */
-export function equityChart({ points, base, height = 132, mini = false, label = '' }) {
+export function equityChart({ points, base, height = 132, mini = false, label = '', long = false }) {
+  const when = long ? fmt.monthYear : fmt.dayMonth; // multi-year curves show months and years
   const H = height;
   const padR = mini ? 0 : 56, padT = 6, padB = mini ? 4 : 18;
   const x1 = W - padR;
@@ -196,15 +197,15 @@ export function equityChart({ points, base, height = 132, mini = false, label = 
       { y: y(maxV), v: maxV }, { y: y(minV), v: minV }, { y: y(base), v: base },
     ].filter((l, i, arr) => arr.findIndex((m) => m.v === l.v) === i), 14, padT + 6, H - padB - 4);
     for (const l of labels) svg.append(s('text', { x: x1 + 8, y: l.y + 3.5 }, fmt.money(l.v)));
-    svg.append(s('text', { x: 0, y: H - 4 }, fmt.dayMonth(points[0].t)));
-    svg.append(s('text', { x: x1, y: H - 4, 'text-anchor': 'end' }, fmt.dayMonth(points[n - 1].t)));
+    svg.append(s('text', { x: 0, y: H - 4 }, when(points[0].t)));
+    svg.append(s('text', { x: x1, y: H - 4, 'text-anchor': 'end' }, when(points[n - 1].t)));
   }
   const wrap = h('div', { class: 'chart' });
   if (!mini) {
     const read = h('div', { class: 'chart-read' });
     const xh = s('line', { y1: padT, y2: H - padB, class: 'xhair', visibility: 'hidden' });
     svg.append(xh);
-    const show = (i) => read.replaceChildren(h('span', null, fmt.dayMonth(points[i].t)), h('b', null, fmt.money(points[i].v)),
+    const show = (i) => read.replaceChildren(h('span', null, when(points[i].t)), h('b', null, fmt.money(points[i].v)),
       h('span', { class: points[i].v >= base ? 'gain' : 'loss' }, fmt.pct(((points[i].v - base) / base) * 100)));
     show(n - 1);
     const hit = s('rect', { x: 0, y: 0, width: x1, height: H, fill: 'transparent' });

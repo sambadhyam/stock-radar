@@ -20,6 +20,34 @@ export function dailyFrom(closes, { end = '2026-10-26', vol = 2e6, spikes = {}, 
 }
 const r2 = (x) => Math.round(x * 100) / 100;
 
+/** A deterministic random walk of closes, for long backtest histories. */
+export function randomWalk(n, start, drift, vol, seed = 1) {
+  let s = seed; const rnd = () => { s = (s * 16807) % 2147483647; return s / 2147483647; };
+  const out = []; let p = start;
+  for (let i = 0; i < n; i++) { p = Math.max(1, p * (1 + drift + vol * (rnd() - 0.5) * 2)); out.push(p); }
+  return out;
+}
+
+/**
+ * 5-minute sessions for each of the given weekday dates: 75 bars from 09:15, built by bar(k, dayIndex) → [o, h, l, c, v].
+ */
+export function sessions(dates, bar) {
+  const out = [];
+  dates.forEach((d, di) => { for (let k = 0; k < 75; k++) { const b = bar(k, di); out.push({ t: d + (555 + 5 * k) * 60000, o: b[0], h: b[1], l: b[2], c: b[3], v: b[4] }); } });
+  return out;
+}
+
+/** An opening-range breakout every session: range 100–101, a high-volume close above it at 09:40, a climb to 102.6, then back to 100. */
+export function orbSessions(dates) {
+  return sessions(dates, (k) => {
+    if (k < 3) return [[100.2, 101, 100, 100.7, 90000], [100.7, 100.9, 100.3, 100.5, 60000], [100.5, 100.8, 100.2, 100.6, 50000]][k];
+    if (k < 5) return [[100.6, 100.8, 100.5, 100.7, 25000], [100.7, 100.9, 100.6, 100.8, 22000]][k - 3];
+    if (k === 5) return [100.8, 101.25, 100.75, 101.2, 80000];
+    if (k < 40) { const p = Math.min(102.6, 101.2 + (k - 5) * 0.06); return [r2(p - 0.05), r2(p + 0.05), r2(p - 0.1), r2(p), 20000]; }
+    const p = Math.max(100, 102.6 - (k - 40) * 0.07); return [r2(p + 0.05), r2(p + 0.1), r2(p - 0.05), r2(p), 15000];
+  });
+}
+
 /** Smooth trend with a tiny deterministic wiggle. */
 export function trend(n, start, dailyPct, wiggle = 0.003) {
   const out = []; let p = start;

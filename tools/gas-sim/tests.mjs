@@ -11,7 +11,7 @@ import * as SC from './scenarios.mjs';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const FILES = path.join(here, '..', '..', 'apps-script');
 // Setup.gs first on purpose: the engine must not depend on the order files load in.
-const ORDER = ['Setup.gs', 'Review.gs', 'Signals.gs', 'Engine.gs', 'Api.gs', 'Data.gs', 'Core.gs'];
+const ORDER = ['Setup.gs', 'Lab.gs', 'Review.gs', 'Signals.gs', 'Engine.gs', 'Api.gs', 'Data.gs', 'Core.gs'];
 // Every test runs under the real manifest, so a permission missing from appsscript.json fails here first.
 const MANIFEST = JSON.parse(fs.readFileSync(path.join(FILES, 'appsscript.json'), 'utf8'));
 
@@ -43,6 +43,7 @@ const KEYS = {
   ANGEL_TOTP_SECRET: 'jbsw y3dp ehpk 3pxp jbsw y3dp ehpk 3pxp', TG_BOT_TOKEN: '7123456789:AAFakeTokenForTestsOnly_abcdefghijk', TG_CHAT_ID: '987654321',
 };
 const NORMAL_SECRET = 'JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP';
+const GEMINI_KEY = 'test-only-gemini-key-not-real-0000000000'; // deliberately not in Google's key format, so secret scanners stay quiet
 
 function makeSymbols(n, prefix) { return Array.from({ length: n }, (_, i) => `${prefix}${String(i + 1).padStart(3, '0')}`); }
 const REAL = ['RELIANCE', 'TCS', 'HDFCBANK', 'INFY', 'TITAN', 'SBIN'];
@@ -151,6 +152,14 @@ function world(sim, opts = {}) {
       return { code: 200, body: master() };
     }
     if (url.includes('finance.yahoo.com')) return { code: 429, body: 'Too Many Requests' };
+    if (url.startsWith('https://generativelanguage.googleapis.com/v1beta/models/')) {
+      w.geminiCalls = (w.geminiCalls || 0) + 1;
+      w.geminiUrl = url;
+      if (w.geminiDown) return { code: 429, body: { error: { code: 429, message: 'Resource has been exhausted (e.g. check quota).' } } };
+      if (h['x-goog-api-key'] !== GEMINI_KEY) return { code: 400, body: { error: { code: 400, message: 'API key not valid. Please pass a valid API key.' } } };
+      w.geminiPrompt = body.contents[0].parts[0].text;
+      return { code: 200, body: { candidates: [{ content: { parts: [{ text: '- Profit rose 12% in the quarter.\n- **Won** a large order.\n- Shares rose after the results.\n- A fourth line that is dropped.' }] }, finishReason: 'STOP' }] } };
+    }
     if (url.startsWith('https://news.google.com/rss/search')) {
       w.newsCalls = (w.newsCalls || 0) + 1;
       const item = (i) => `<item><title><![CDATA[Headline ${i} &amp; more]]></title><link>https://news.google.com/rss/articles/abc${i}</link><pubDate>Mon, 26 Oct 2026 0${i}:00:00 GMT</pubDate><source url="https://example.com">Paper ${i}</source></item>`;
@@ -180,7 +189,7 @@ test('files load in any order and the menu is created', () => {
   const { sim, G } = fresh();
   sim.state.uiAvailable = true;
   G.onOpen();
-  eq(sim.state.menu.items.length, 12, 'menu items');
+  eq(sim.state.menu.items.length, 13, 'menu items');
   eq(sim.state.menu.items[0][1], 'menuCreateSheets');
 });
 
@@ -1165,6 +1174,270 @@ test('connect: the link carries the web app address and token; bad addresses are
   G.newAppToken();
   ok(sim.state.props.get('APP_TOKEN') !== old, 'token rotated');
   eq(post(G, { a: 'ping', t: old }).ok, false, 'old token refused');
+});
+
+// =================== Phase 5: backtester, holdings, fundamentals, AI summaries ===================
+
+/**
+ * A world with four years of random-walk prices for the Nifty 50 stocks, a backtest universe of Nifty 50,
+ * 20 sessions of 5-minute history, and TCS making an opening-range breakout every session while Nifty rises.
+ */
+function labWorld() {
+  const end = '2026-10-23', LEN = 1300;
+  const env = marketWorld({ end, allQuiet: false });
+  const { G, sim, w } = env;
+  w.daily['99926000'] = SC.dailyFrom(SC.randomWalk(LEN, 9000, 0.0005, 0.011, 3), { end, vol: 0 });
+  w.daily['99926017'] = SC.dailyFrom(SC.randomWalk(LEN, 14, 0, 0.04, 5).map((v) => Math.min(30, Math.max(10, v))), { end, vol: 0 });
+  N50.forEach((sym, i) => { w.daily[TOKENS[sym]] = SC.dailyFrom(SC.randomWalk(LEN, 100 + i * 7, 0.0003 + (i % 5) * 0.0002, 0.016, 11 + i), { end, vol: 3e6 }); });
+  const days = SC.weekdays(end, 30);
+  w.intra[TOKENS.TCS] = SC.orbSessions(days);
+  w.intra['99926000'] = SC.sessions(days, (k) => { const o = 22600 * (1 + 0.0003 * k), c = o * 1.0003; return [Math.round(o * 100) / 100, Math.round(c * 100 + 200) / 100, Math.round(o * 100 - 200) / 100, Math.round(c * 100) / 100, 0]; });
+  G.setupSheets();
+  setConfig(sim, G, 'backtestUniverse', 'NIFTY50');
+  setConfig(sim, G, 'backtestYears', '4');
+  setConfig(sim, G, 'intradayHistoryDays', '20');
+  G.MarketCal._now = at('2026-10-25T21:00:00+05:30'); // Sunday evening: a quiet time
+  G.loadHistory();
+  return env;
+}
+
+/** Run the backtest's background steps the way the one-off triggers would, until it finishes. */
+function runBacktest(G, sim) {
+  for (let i = 0; i < 15; i++) {
+    const tr = sim.state.triggers.find((t) => t.handler === 'continueBacktest');
+    if (!tr) break;
+    G.continueBacktest();
+  }
+  return G.Backtest.job();
+}
+
+test('backtest: the menu loads long history, tests every strategy and sends the Backtest Baseline report', () => {
+  const { G, sim, w } = labWorld();
+  sim.state.uiAvailable = true;
+  const before = w.telegram.length;
+  G.menuBacktest();
+  ok(/starts in about a minute/.test(sim.state.alerts[sim.state.alerts.length - 1].msg), sim.state.alerts[sim.state.alerts.length - 1].msg);
+  ok(sim.state.triggers.some((t) => t.handler === 'continueBacktest'), 'runs in the background');
+  const j = runBacktest(G, sim);
+  eq(j.stage, 'done', 'finished: ' + JSON.stringify(j));
+  const files = sim.state.drive.items.map((f) => f.name);
+  for (const f of ['long-00.json', 'intra-00.json', 'bt-context.json', 'btd-00.json', 'bti-00.json', 'bt-result.json']) ok(files.includes(f), 'Drive file ' + f + ' in ' + files.join());
+  ok(w.candleCalls.some((c) => c.interval === 'ONE_DAY' && c.fromdate < '2023-'), 'asked for older daily candles');
+  ok(w.candleCalls.some((c) => c.interval === 'FIVE_MINUTE' && c.symboltoken === TOKENS.TCS), '5-minute history');
+  // Long history joins the everyday file: about four years of candles.
+  G.History.reset(); G.LongHistory.reset();
+  const k = G.LongHistory.get('RELIANCE');
+  ok(k.length > 950 && k.length < 1100, 'four years of daily candles: ' + k.length);
+  ok(k.every((c, i) => i === 0 || c.t > k[i - 1].t), 'one candle per day, in order');
+  const msg = w.telegram.slice(before).join('\n');
+  ok(/🧪 <b>Backtest Baseline<\/b>/.test(msg) && /Swing<\/b> · \d+ Nifty 50 stocks/.test(msg) && /Intraday<\/b> · \d+ stocks · last \d+ sessions/.test(msg), msg);
+  ok(/Opening-range breakout: \d+ trades/.test(msg) && /Read with care/.test(msg) && /Backtest lab/.test(msg), msg);
+  const res = JSON.parse(sim.state.drive.items.find((f) => f.name === 'bt-result.json').content);
+  const orb = res.strategies.orb;
+  ok(orb.metrics.trades >= 15 && orb.metrics.winRatePct > 50, 'ORB trades every session on TCS: ' + JSON.stringify(orb.metrics));
+  ok(orb.sample.every((x) => x[0] === 'TCS' && x[2] === 'B'), 'buys on TCS with Nifty rising');
+  ok(Object.keys(res.strategies).length === 11, 'seven daily and four intraday strategies');
+  const total = Object.values(res.strategies).reduce((a, s) => a + s.metrics.trades, 0);
+  ok(total > 100, 'trades in total: ' + total);
+  ok(res.strategies.macd.curve.length > 10 && res.strategies.macd.curve[0].v === 100000, 'monthly equity curve from the paper capital');
+  // "Latest trades" come from every data file, newest first (trades arrive one file at a time).
+  const macdSample = res.strategies.macd.sample;
+  ok(macdSample.length === 20 && new Set(macdSample.map((x) => x[0])).size > 1, 'latest trades across stocks: ' + macdSample.map((x) => x[0]).join());
+  const lastDay = Math.max(...macdSample.map((x) => x[1]));
+  ok(lastDay > Date.parse('2026-06-01T00:00:00+05:30'), 'the latest trades are recent: ' + new Date(lastDay).toISOString());
+  const rows = sheetRows(sim, 'Backtests');
+  eq(rows.length, 11); ok(rows.every((r) => r.runId === j.runId && r.trades >= 0), 'one row per strategy');
+  ok(sheetRows(sim, 'Reports').some((r) => r.type === 'backtest' && /Backtest Baseline/.test(r.title)), 'saved in Reports');
+  // The app sees the numbers next to the paper record.
+  const token = sim.state.props.get('APP_TOKEN');
+  const b = post(G, { a: 'bundle', t: token }).data;
+  eq(b.backtest.state, 'done');
+  const bo = b.strategies.find((x) => x.id === 'orb').backtest;
+  ok(bo && bo.trades === orb.metrics.trades && bo.win === orb.metrics.winRatePct && bo.dd <= 0 && /^\d{4}-\d\d-\d\d$/.test(bo.from), JSON.stringify(bo));
+  eq(b.strategies.find((x) => x.id === 'holding-guard').backtest, null, 'not backtested');
+  ok(b.params['orb.volMult'] === 1.5, 'strategy settings for the lab');
+  // The lab's data: the result, stock lists, and history with the market context.
+  const ov = post(G, { a: 'backtest', t: token }).data;
+  ok(ov.result.runId === j.runId && ov.lists.universe.length === 50 && ov.lists.intraday.includes('TCS'), JSON.stringify(ov.lists).slice(0, 200));
+  const dd = post(G, { a: 'btData', t: token, kind: 'daily', symbols: ['RELIANCE', 'TCS', '../BAD'], market: true }).data;
+  ok(dd.series.RELIANCE.d.length > 950 && dd.series.RELIANCE.c.length === dd.series.RELIANCE.d.length, 'daily columns');
+  ok(dd.market.days.length === dd.market.regime.length && dd.rs.RELIANCE.length === dd.market.days.length, 'market context');
+  eq(Object.keys(dd.series).length, 2, 'bad symbol dropped');
+  const id = post(G, { a: 'btData', t: token, kind: 'intraday', symbols: ['TCS'], market: true }).data;
+  ok(id.series.TCS.t.length >= 20 * 75 && id.market.nifty.t.length >= 20 * 75 && Object.keys(id.market.regimeByDay).length > 500, 'intraday columns');
+  if (process.env.LAB_OUT) {
+    // Fixtures for the app's screenshot check of the Backtest lab and Portfolio screens.
+    const syms = ov.lists.nifty50.slice(0, 50);
+    const daily = { series: {}, rs: {} };
+    for (let i = 0; i < syms.length; i += 10) { const part = post(G, { a: 'btData', t: token, kind: 'daily', symbols: syms.slice(i, i + 10), market: i === 0 }).data; Object.assign(daily.series, part.series); Object.assign(daily.rs, part.rs); if (part.market) daily.market = part.market; }
+    const intraday = post(G, { a: 'btData', t: token, kind: 'intraday', symbols: ['TCS'].concat(ov.lists.intraday.filter((s) => s !== 'TCS').slice(0, 7)), market: true }).data;
+    fs.writeFileSync(process.env.LAB_OUT, JSON.stringify({ bundle: b, overview: ov, daily, intraday, token, url: 'https://script.google.com/macros/s/AKfycbFAKEdeploymentIDforTests1234567890/exec' }));
+  }
+  // Running it again is a refresh, not a new baseline.
+  const again = G.Backtest.start('menu');
+  ok(again.first === false, 'second run is a refresh');
+});
+
+test('backtest: it waits for a quiet time, starts by itself after the first close, and refreshes monthly', () => {
+  const { G, sim } = labWorld();
+  G.MarketCal._now = at('2026-10-26T11:00:00+05:30'); // Monday, market open
+  ok(!G.Backtest.quiet(), 'market hours are not quiet');
+  G.Backtest.start('app');
+  const when = G.Backtest.schedule();
+  eq(new Date(when).toISOString(), new Date(at('2026-10-26T18:16:00+05:30')).toISOString(), 'scheduled for the evening');
+  G.continueBacktest(); // a stray trigger during market hours does nothing but reschedule
+  eq(G.Backtest.job().stage, 'long');
+  sim.props = null;
+  sim.state.props.delete('BT_JOB');
+  G.MarketCal._now = at('2026-10-26T16:40:00+05:30');
+  ok(G.Backtest.autoStart(), 'starts the first baseline after the close');
+  ok(!G.Backtest.autoStart(), 'only once');
+  sim.state.props.set('BT_SUMMARY', JSON.stringify({ at: at('2026-09-01T20:00:00+05:30'), daily: {}, intraday: {}, s: {} }));
+  sim.state.props.set('BT_JOB', JSON.stringify({ stage: 'done' }));
+  G.MarketCal._now = at('2026-10-31T10:40:00+05:30');
+  ok(G.Backtest.weeklyCheck(), 'a two-month-old baseline is refreshed on Saturday');
+  eq(G.Backtest.job().first, false);
+});
+
+test('backtest: it keeps to its share of the 90 trigger minutes a day and pauses until that share frees up', () => {
+  const { G, sim } = labWorld();
+  const when = () => { const tr = sim.state.triggers.filter((t) => t.handler === 'continueBacktest'); eq(tr.length, 1, 'one follow-up'); return new Date(tr[0].spec ? tr[0].spec.at : tr[0].at).getTime(); };
+  G.MarketCal._now = at('2026-10-25T21:00:00+05:30'); // Sunday evening
+  G.Backtest.start('menu');
+  sim.state.props.set('BT_USAGE', JSON.stringify([[at('2026-10-25T19:00:00+05:30'), 29 * 60000]]));
+  G.continueBacktest();
+  let j = G.Backtest.job();
+  eq(j.stage, 'long', 'no step while 29 of the 30 minutes are used');
+  ok(/paused for today's time limit, continues Mon 26 Oct 19:01/.test(j.note), j.note);
+  eq(when(), at('2026-10-26T19:01:00+05:30'), 'resumes when the old runs leave the 24-hour window');
+  // Freed during market hours: waits for the evening instead.
+  sim.state.props.set('BT_USAGE', JSON.stringify([[at('2026-10-25T10:00:00+05:30'), 29 * 60000]]));
+  G.MarketCal._now = at('2026-10-25T21:05:00+05:30');
+  G.continueBacktest();
+  eq(when(), at('2026-10-26T18:16:00+05:30'), 'Monday evening, not 10:01 in market hours');
+  j = G.Backtest.job();
+  eq((j.note.match(/paused/g) || []).length, 1, 'the pause is noted once: ' + j.note);
+  // A setting raises the share; then the step runs and is counted.
+  setConfig(sim, G, 'backtestMinutesPerDay', '40');
+  G.continueBacktest();
+  j = G.Backtest.job();
+  ok(!/paused/.test(j.note) && /Loading long price history|history loaded|Finished/.test(j.note), j.note);
+  const runs = JSON.parse(sim.state.props.get('BT_USAGE'));
+  eq(runs.length, 2, 'the step is logged'); ok(runs[1][1] >= 0);
+  // The app can change it, within 10–40 minutes.
+  const token = sim.state.props.get('APP_TOKEN');
+  eq(post(G, { a: 'settings', t: token, settings: { backtestMinutesPerDay: 25 } }).data.backtestMinutesPerDay, 25);
+  eq(post(G, { a: 'settings', t: token, settings: { backtestMinutesPerDay: 90 } }).ok, false, 'too much is refused');
+});
+
+test('portfolio: holdings from the app are saved, valued after the close, flagged, and never sent anywhere else', () => {
+  const day = '2026-10-26';
+  const { G, sim, w } = marketWorld({ end: day, daily: { [TOKENS.INFY]: SC.daily['holding-guard'](), [TOKENS.RELIANCE]: SC.daily['base-breakout']() } });
+  G.MarketCal._now = at('2026-10-23T21:00:00+05:30');
+  G.loadHistory();
+  const token = sim.state.props.get('APP_TOKEN');
+  const rows = [
+    { symbol: 'RELIANCE', qty: 10, avgPrice: 50, lastPrice: 60, sector: 'Oil Gas & Consumable Fuels', isin: 'INE002A01018' },
+    { symbol: 'INFY-EQ', qty: 20, avgPrice: 60, longTermQty: 20 },
+    { symbol: 'NSE:TCS', qty: 2, avgPrice: 100 },
+    { symbol: 'TCS', qty: 2, avgPrice: 110 },
+    { symbol: 'not a symbol!', qty: 1, avgPrice: 5 },
+  ];
+  const r = post(G, { a: 'holdings', t: token, mode: 'replace', rows, source: 'Zerodha Console XLSX' });
+  eq(r.ok, true, r.error);
+  eq(r.data.result.saved, 3); eq(r.data.result.skipped.join(), 'not a symbol!');
+  const h = sheetRows(sim, 'Holdings');
+  eq(h.map((x) => x.symbol).join(), 'INFY,RELIANCE,TCS', 'cleaned and sorted');
+  const tcs = h.find((x) => x.symbol === 'TCS');
+  eq(tcs.qty, 4); eq(tcs.avgPrice, 105, 'duplicate rows merged at the average price');
+  ok(sim.state.triggers.some((t) => t.handler === 'valueHoldings'), 'valued a minute later');
+  G.valueHoldings();
+  const v1 = post(G, { a: 'bundle', t: token }).data.portfolio;
+  ok(v1 && v1.holdings.length === 3 && v1.totals.value > 0 && v1.sectors.length >= 1, JSON.stringify(v1).slice(0, 300));
+  const infy = v1.holdings.find((x) => x.symbol === 'INFY');
+  ok(infy.last > 0 && infy.trailStop > 0 && infy.dma200 > 0 && !infy.flags.length, 'INFY valued, nothing wrong yet: ' + JSON.stringify(infy));
+  ok(v1.warnings.some((x) => x.kind === 'stock' && x.symbol === 'INFY'), 'concentration warning: ' + JSON.stringify(v1.warnings));
+  // Your own stop-loss (5% under Friday's close) and buy date for a holding.
+  const e1 = post(G, { a: 'holdings', t: token, mode: 'edit', symbol: 'INFY', patch: { stop: Math.round(infy.last * 0.95 * 100) / 100, buyDate: '2025-11-15' } });
+  eq(e1.ok, true, e1.error);
+  eq(post(G, { a: 'holdings', t: token, mode: 'edit', symbol: 'INFY', patch: { buyDate: '2027-01-01' } }).ok, false, 'future buy date refused');
+  eq(post(G, { a: 'holdings', t: token, mode: 'edit', symbol: 'INFY', patch: { stop: -4 } }).ok, false, 'bad price refused');
+  eq(post(G, { a: 'holdings', t: token, mode: 'edit', symbol: 'WIPRO', patch: { stop: 4 } }).ok, false, 'not held');
+  // The close: the holding guard warns with your stop-loss, the holdings are valued, the 12-month note goes out once.
+  G.MarketCal._now = at('2026-10-26T08:20:00+05:30');
+  G.Schedule.install();
+  tickAtDay(G, day, '08:50');
+  const sent0 = w.telegram.length;
+  tickAtDay(G, day, '16:00');
+  const a = alertsRows(sim).find((x) => x.symbol === 'INFY' && x.direction === 'EXIT');
+  ok(a && /at or below your stop-loss/.test(a.reasons) && /trailing stop/.test(a.reasons), 'exit alert: ' + (a && a.reasons));
+  const msgs = w.telegram.slice(sent0).join('\n----\n');
+  ok(/EXIT CHECK: INFY/.test(msgs), 'exit message');
+  ok(/Your holdings<\/b>: ₹/.test(msgs) && /INFY: .*under its trailing stop/.test(msgs), 'closing summary: ' + msgs);
+  ok(/📅 <b>INFY completes 12 months on Sun 15 Nov<\/b>/.test(msgs), '12-month note');
+  w.telegram.length = 0;
+  G.Portfolio.taxNotes();
+  ok(!w.telegram.some((t) => /completes 12 months/.test(t)), 'sent once');
+  const v2 = post(G, { a: 'bundle', t: token }).data.portfolio.holdings.find((x) => x.symbol === 'INFY');
+  ok(v2.flags.includes('trail') && v2.flags.includes('stop') && v2.flags.includes('ltSoon') && v2.lt.longTermFrom === '2026-11-15', JSON.stringify(v2));
+  eq(post(G, { a: 'holdings', t: token, mode: 'clear' }).data.portfolio, null, 'cleared');
+  eq(post(G, { a: 'holdings', t: token, mode: 'replace', rows: [] }).ok, false, 'an empty file is refused');
+});
+
+test('fundamentals: a Screener export mapped by the app is matched to NSE symbols and scored', () => {
+  const { G, sim } = marketWorld();
+  const token = sim.state.props.get('APP_TOKEN');
+  const rows = [
+    { name: 'RELIANCE Ltd', roePct: 24, rocePct: 26, debtToEquity: 0.05, sales3yPct: 16, profit3yPct: 20, promoterPct: 70, pledgePct: 0, pe: 22, pe5yMedian: 30, fcf: 1200 },
+    { symbol: 'TCS', name: 'Tata Consultancy', roePct: 45, rocePct: 55, debtToEquity: 0.1, sales3yPct: 12, profit3yPct: '' },
+    { name: 'Some Unlisted Company', roePct: 5 },
+  ];
+  const r = post(G, { a: 'fundamentals', t: token, rows, source: 'Screener export' });
+  eq(r.ok, true, r.error);
+  eq(r.data.matched, 2); eq(r.data.unmatched.join(), 'Some Unlisted Company');
+  eq(r.data.fields.roePct, 2); eq(r.data.fields.profit3yPct, 1, 'blanks are not counted');
+  const f = sheetRows(sim, 'Fundamentals');
+  eq(f.length, 2); eq(f.find((x) => x.symbol === 'TCS').profit3yPct, '', 'missing stays blank, never guessed');
+  const b = post(G, { a: 'bundle', t: token }).data;
+  eq(b.fundamentals.RELIANCE.roe, 24);
+  eq(post(G, { a: 'fundamentals', t: token, rows: [{ name: 'Nobody' }] }).ok, false, 'nothing matched');
+});
+
+test('AI summaries: off by default, need a key, label-free text in, three bullets out, cached', () => {
+  const { G, sim, w } = marketWorld();
+  const token = sim.state.props.get('APP_TOKEN');
+  const off = post(G, { a: 'summary', t: token, symbol: 'RELIANCE' });
+  ok(!off.ok && /off/.test(off.error), off.error);
+  eq(post(G, { a: 'bundle', t: token }).data.ai.enabled, false);
+  eq(post(G, { a: 'settings', t: token, settings: { aiSummaries: true } }).ok, true);
+  G.Config._cache = null;
+  const nokey = post(G, { a: 'summary', t: token, symbol: 'RELIANCE' });
+  ok(!nokey.ok && /Set up keys/.test(nokey.error), nokey.error);
+  eq(G.saveSecretsFromDialog({ GEMINI_API_KEY: GEMINI_KEY }).errors.length, 0);
+  const r = post(G, { a: 'summary', t: token, symbol: 'RELIANCE' });
+  eq(r.ok, true, r.error);
+  eq(r.data.bullets.length, 3); eq(r.data.bullets[1], 'Won a large order.', 'markdown removed'); eq(r.data.headlines, 3);
+  ok(/gemini-3\.5-flash-lite:generateContent$/.test(w.geminiUrl), w.geminiUrl);
+  ok(/NSE: RELIANCE/.test(w.geminiPrompt) && /Headline 1 & more/.test(w.geminiPrompt) && /Do not give buy, sell or price advice/.test(w.geminiPrompt), w.geminiPrompt);
+  post(G, { a: 'summary', t: token, symbol: 'RELIANCE' });
+  eq(w.geminiCalls, 1, 'second call from the cache');
+  w.geminiDown = true;
+  const q = post(G, { a: 'summary', t: token, symbol: 'TCS' });
+  ok(!q.ok && /free quota/.test(q.error), q.error);
+  const text = JSON.stringify(sim.state.requests.filter((x) => x.url.includes('generativelanguage')).map((x) => x.url)) + JSON.stringify(q) + JSON.stringify(r);
+  ok(!text.includes(GEMINI_KEY), 'the key is never in an address or an answer');
+  eq(post(G, { a: 'bundle', t: token }).data.ai.key, true);
+});
+
+test('settings: the app can change the Phase 5 numbers and switches, within limits', () => {
+  const { G, sim } = marketWorld();
+  const token = sim.state.props.get('APP_TOKEN');
+  const r = post(G, { a: 'settings', t: token, settings: { portfolioMaxStockPct: 25, portfolioMaxSectorPct: 40, backtestYears: 7.4, intradayHistoryDays: 90 } });
+  eq(r.ok, true, r.error);
+  G.Config._cache = null;
+  eq(G.Config.get('backtestYears'), 7, 'whole years'); eq(G.Config.get('portfolioMaxSectorPct'), 40);
+  eq(post(G, { a: 'settings', t: token, settings: { backtestYears: 40 } }).ok, false, 'out of range');
+  eq(r.data.intradayHistoryDays, 90);
 });
 
 coreTests({ test, eq, ok, root: path.join(here, '..', '..') });

@@ -4,7 +4,7 @@ Personal NSE analysis, alerts and self-checking paper trading. Phone-only workfl
 
 - **App:** https://sambadhyam.github.io/stock-radar/
 - **Repo:** `sambadhyam/stock-radar`
-- **Status:** Phase 4 complete (Web App API; the app shows live engine data once connected, sample data until then).
+- **Status:** Phase 5 complete: all phases built. The engine backtests every strategy on up to 10 years of history and sends a Backtest Baseline report; the app has a Backtest lab, portfolio import and fundamentals import, and optional AI news summaries.
 
 ---
 
@@ -43,6 +43,7 @@ Nothing in this system can place an order. Under SEBI's retail-algo rules, API o
 | Google Finance | Historical GOOGLEFINANCE data cannot be read from Apps Script (shows #N/A). Current quotes can. | [Google Workspace Updates](https://workspaceupdates.googleblog.com/2016/09/historical-googlefinance-data-no-longer.html) |
 | Yahoo Finance | Chart endpoint frequently returns HTTP 429 and crumb errors since February 2025. Treated as a last-resort fallback only. | [yfinance issue #2297](https://github.com/ranaroussi/yfinance/issues/2297) |
 | NSE holidays left in 2026 | 10 Nov (Diwali Balipratipada), 24 Nov (Guru Nanak Jayanti), 25 Dec (Christmas). Muhurat trading Sunday 8 Nov, timings to be announced. | [Upstox](https://upstox.com/stocks-market/nse-holidays/), [ClearTax](https://cleartax.in/s/nse-holidays-2026) |
+| Gemini API (optional AI summaries) | `POST https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent`, API key in the `x-goog-api-key` header. Model code `gemini-3.5-flash-lite` (Gemini 3.5 Flash-Lite). Keys from Google AI Studio. | [Gemini API: Gemini 3.5 Flash-Lite](https://ai.google.dev/gemini-api/docs/models/gemini-3.5-flash-lite) |
 | Zerodha charges (defaults) | Delivery: ₹0 brokerage, STT 0.1% buy and sell, stamp 0.015% buy, DP ₹15.34 per scrip on sell days. Intraday: 0.03% or ₹20 per order, STT 0.025% sell, stamp 0.003% buy. Both: NSE transaction 0.00307%, SEBI ₹10 per crore, GST 18% on brokerage + fees. | [Zerodha charges](https://www.zerodha.com/charges) |
 
 ---
@@ -74,6 +75,17 @@ Nothing in this system can place an order. Under SEBI's retail-algo rules, API o
     - **Shadow track:** signals blocked only by the market filters (regime, the intraday Bear/Bull switches, the day's direction) are logged with `track = shadow`, judged the same way, and compared per filter in the weekly "Filter check". They never count towards graduation or the paper account.
     - **Checkpoints:** medium and long buys get 1, 3, 6 and 12-month checkpoints plus a FINAL row, each against Nifty 50.
     - **Exit warnings** (holding guard) are judged after 20 trading days: right if the price fell.
+12. **Backtester (Phase 5).** Same rules as the live record: the per-day market context (regime, breadth, relative strength) is rebuilt from history without hindsight in `btContext`, and `backtestDaily` / `backtestIntraday` run the same strategy functions and `finalize` checks as the live scans, then `simulateTrade` and `paperResult`. Each signal uses only candles up to its own close and is judged on the candles after it.
+    - **Data:** daily candles older than the everyday files go to `long-00…11.json` (680-day windows, about 470 rows each, under Angel One's ~500-row answers), back to `backtestYears` (10). 5-minute candles of the intraday stocks and Nifty 50 go to `intra-00…11.json`, the last `intradayHistoryDays` (60) sessions in 6-day windows.
+    - **Job:** stages long → intra → ctx → daily → intraday → report, saved in `BT_JOB`, each step about 4 minutes, run by one-off `continueBacktest` triggers only outside market hours (after 18:15 or before 08:30 on trading days, any time on other days). It uses at most `backtestMinutesPerDay` (30) trigger minutes in any 24 hours, so with the live engine's ~45 it stays inside Google's 90; a first run is spread over one or two evenings. Four failed tries in a row stop it with a Telegram message.
+    - **When:** after the first close with Phase 5 installed it starts by itself and sends the **Backtest Baseline** report (Telegram, email, Reports, Backtests sheet). Saturdays refresh it once it is `backtestRefreshDays` (30) old. Menu item 7 and the app's button start it any time.
+    - **Sizing:** like the paper account, but with fractional shares so expensive stocks still count in rupees; each trade as if it were the only position.
+    - **Verdicts:** Positive (average > 0 after charges and profit factor ≥ 1.3), Thin (positive, factor below), Loses (average ≤ 0), Few trades (< 30). The Filter check compares the signals each filter held back with those it let through.
+    - **In the app:** the Backtest lab shows the baseline per strategy (equity curve, regime and year breakdown, latest trades) and runs your own tests in a Web Worker with the same core.js: another stock list, period, filters or strategy settings. History comes from the engine in small parts (`btData`) and stays in IndexedDB for later tests. Strategy cards in Results put the backtest next to the paper numbers.
+    - **Honest limits:** survivorship bias (today's index list for the whole period); fundamentals are not backtested; no slippage; intraday on 5-minute bars (the live check uses 1-minute); how far back Angel One serves daily candles is not documented, so some stocks may have less than 10 years.
+13. **Portfolio (Phase 5).** The holdings file from Zerodha Console (XLSX) or Kite (CSV) is read on the phone (`js/xlsx.js` reads XLSX with the browser's own unzip; columns are found by name) and saved to the Holdings sheet only, never to the repo. After each close the engine values each holding (close, previous close, 200-day average, the holding guard's trailing stop) and the app shows P&L, sector mix and concentration warnings (`portfolioMaxStockPct` 20, `portfolioMaxSectorPct` 35). Your own stop-loss and target per holding give an exit warning on the close that crosses them. With a buy date, a Telegram note comes once as a holding nears 12 months (long-term capital gains). Not tax advice.
+14. **Fundamentals (Phase 5).** A Screener export (CSV or XLSX) is matched by column names, with a select per field to fix the match. Rows are matched to NSE symbols by the NSE code, else by company name. Missing values stay empty: the score never invents them and shows how complete each stock's data is.
+15. **AI summaries (Phase 5, optional, off by default).** With `aiSummaries` on and `GEMINI_API_KEY` in Script Properties, a stock sheet can ask Gemini for three bullets on its recent Google News headlines. Only the stock's name and the public headlines are sent; the prompt forbids buy/sell or price advice; the answer is labelled "AI summary — not a signal" and cached for 6 hours.
 
 ---
 
@@ -104,8 +116,9 @@ Other working assumptions: Muhurat trading is treated as a closed day for the en
 | EOD history update + evaluation + scans + summary (16:00) | 2–4 chained | ≤ 4 min | ~7 |
 | Weekly report (Saturday) | 1 | ≤ 60 s | 1 |
 | **Total** | | | **~45 of 90** |
+| Backtest (Phase 5, outside market hours, first run and monthly refresh only) | 6–8 the first time | ~4 min | capped at 30 in any 24 hours |
 
-URL fetches: about 4,600 on a normal day (63 scans × up to 60 candle requests, about 520 daily candles at the close, and one 1-minute request per stock with an intraday alert) against the 20,000 limit. The one-time history load (about 520 requests) takes one menu run plus one or two automatic follow-ups.
+URL fetches: about 4,600 on a normal day (63 scans × up to 60 candle requests, about 520 daily candles at the close, and one 1-minute request per stock with an intraday alert) against the 20,000 limit. The one-time history load (about 520 requests) takes one menu run plus one or two automatic follow-ups. The first backtest asks for about 1,100 daily windows (Nifty 200, the indices and the watchlist over 10 years) and about 850 five-minute windows; later refreshes only fetch what is new.
 
 ---
 
@@ -164,8 +177,12 @@ stock-radar/
 │   ├── data.js              sample data until connected; then the engine bundle with offline cache, charts on demand
 │   ├── demo.js              Phase 0 sample data, always labelled
 │   ├── api.js               engine client (POST text/plain, token, timeouts, plain-English errors)
-│   ├── backtest.js          (Phase 5) in-browser backtester
-│   └── screens/             home, alerts, scan, results, more, settings, connect
+│   ├── backtest.js          Backtest lab: history from the engine in parts, cached in IndexedDB, runs in the worker
+│   ├── bt-worker.js         Web Worker that runs core.js backtests off the main thread
+│   ├── idb.js               tiny IndexedDB key-value store
+│   ├── xlsx.js              reads CSV and XLSX files on the phone (no library)
+│   ├── importers.js         finds the columns of a holdings file and a fundamentals export
+│   └── screens/             home, alerts, scan, results, more, settings, connect, lab (Backtest lab), portfolio, fundamentals
 ├── core/core.js             indicators, regime, strategies, checks, sizing, charges (SRCore)
 ├── apps-script/             files to paste into the Apps Script editor (README.md has the steps)
 │   ├── appsscript.json      manifest: Asia/Kolkata timezone, V8
@@ -175,6 +192,7 @@ stock-radar/
 │   ├── Api.gs               Telegram and email, the Web App API, Connect the app
 │   ├── Signals.gs           Drive price history, regime, intraday and end-of-day scans, Alerts log and messages
 │   ├── Review.gs            evaluator, paper trades, checkpoints, metrics, graduation, weekly and readiness reports
+│   ├── Lab.gs               backtest job and Baseline report, long and 5-minute history, holdings, fundamentals import, AI summaries
 │   └── Core.gs              identical copy of core/core.js
 ├── tools/gas-sim/           Node simulator of Apps Script services + tests for apps-script/ and core.js (run: node tools/gas-sim/tests.mjs)
 │                            scenarios.mjs holds the synthetic price series each strategy is tested on
@@ -203,4 +221,4 @@ stock-radar/
 | 2 | `core.js` indicators and strategies, intraday engine, EOD scans, alert logging, price history backfill | ✅ Done |
 | 3 | Evaluator, metrics, auto paper trading, graduation, daily, weekly and readiness reports | ✅ Done (74 simulator tests) |
 | 4 | Web App API, PWA wired to live data, settings synced to the engine | ✅ Done (79 simulator tests, live screens checked at 390×844) |
-| 5 | Backtester and Backtest Baseline report, portfolio import, optional AI summaries | Next |
+| 5 | Backtester and Backtest Baseline report, Backtest lab, portfolio and fundamentals import, optional AI summaries | ✅ Done (92 simulator tests, screens checked at 390×844 in both themes) |

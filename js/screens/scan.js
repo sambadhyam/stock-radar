@@ -1,7 +1,7 @@
 // Scan: ranked long / medium / swing lists, and the stock detail sheet.
 import { h, fmt, tone } from '../util.js';
 import { t } from '../i18n.js';
-import { screenHead, segmented, openSheet, kvList, previewBanner, alertRow } from '../ui.js';
+import { screenHead, segmented, openSheet, kvList, previewBanner, alertRow, toast } from '../ui.js';
 import { candleChart } from '../charts.js';
 import { getData, loadStockChart } from '../data.js';
 import { api } from '../api.js';
@@ -32,7 +32,8 @@ export function render({ data, query }) {
         h('button', { type: 'button', class: 'row', onclick: () => openStock(e.symbol) },
           h('span', { class: 'row-title' }, e.symbol), h('span'),
           h('span', { class: 'row-meta' }, e.sector)))))) : null;
-    body.replaceChildren(note, empty || list, etfs || '');
+    const fundLink = tab === 'long' ? h('a', { class: 'sec-link', href: '#/fundamentals' }, t('scan.importFund')) : null;
+    body.replaceChildren(note, fundLink || '', empty || list, etfs || '');
   };
   draw();
   return h('div', null,
@@ -116,6 +117,28 @@ function stockBody(data, symbol, sc) {
       pastAlerts.length ? h('ul', { class: 'list' }, pastAlerts.map((a) => alertRow(a, openAlert))) : h('p', { class: 'muted' }, t('stock.noAlerts')),
       h('h3', null, t('stock.news')),
       news,
+      aiBlock(data, symbol),
     ].filter(Boolean),
   };
+}
+
+/** Optional AI summary of the stock's headlines (Gemini, set up in the sheet; off by default). */
+function aiBlock(data, symbol) {
+  if (data.isDemo || !data.ai || !data.ai.enabled) return null;
+  const box = h('div', null);
+  if (!data.ai.key) { box.append(h('p', { class: 'note' }, t('ai.noKey'))); return h('div', null, h('h3', null, t('ai.title')), box); }
+  const btn = h('button', { type: 'button', class: 'btn btn-ghost btn-block' }, t('ai.button'));
+  btn.addEventListener('click', async () => {
+    btn.disabled = true; btn.textContent = t('ai.loading');
+    try {
+      const r = await api.summary(symbol);
+      box.replaceChildren(
+        h('div', { class: 'ai-box' },
+          h('div', { class: 'ai-label' }, t('ai.label')),
+          h('ul', { class: 'bullets' }, r.bullets.map((b) => h('li', null, b))),
+          h('p', { class: 'note faint' }, t('ai.source', { n: r.headlines, model: r.model || 'Gemini', time: fmt.time(r.at) }))));
+    } catch (e) { btn.disabled = false; btn.textContent = t('ai.button'); toast(e.message); }
+  });
+  box.append(btn, h('p', { class: 'note faint' }, t('ai.note')));
+  return h('div', null, h('h3', null, t('ai.title')), box);
 }

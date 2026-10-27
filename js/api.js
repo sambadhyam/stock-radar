@@ -55,4 +55,11 @@ export const api = {
   saveSettings: (settings, strategies) => call('settings', { settings, strategies }),
   testTelegram: () => call('testTelegram'),
   news: (symbol) => call('news', { symbol }),
+  // Phase 5
+  backtest: () => call('backtest'),
+  btData: (kind, symbols, market) => call('btData', { kind, symbols, market: !!market }),
+  btStart: () => call('btStart'),
+  holdings: (payload) => call('holdings', payload),
+  fundamentals: (rows, source) => call('fundamentals', { rows, source }),
+  summary: (symbol) => call('summary', { symbol }),
 };

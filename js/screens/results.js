@@ -144,7 +144,8 @@ export function openStrategy(st) {
     st.trades && st.trades < 30 ? h('p', { class: 'note' }, t('results.early')) : null,
     h('h3', null, t('results.backtest')),
     compareTable(st),
-    h('p', { class: 'note' }, t('results.backtestNote')),
+    h('p', { class: 'note' }, st.backtest && st.backtest.from ? t('results.backtestPeriod', { from: fmt.monthYear(Date.parse(st.backtest.from + 'T12:00:00+05:30')), to: fmt.monthYear(Date.parse(st.backtest.to + 'T12:00:00+05:30')) }) : t('results.backtestNote')),
+    h('a', { class: 'sec-link', href: '#/backtest' }, t('results.openLab')),
     st.verdict ? h('div', null, h('h3', null, t('results.verdict')), h('p', { class: 'muted' }, st.verdict)) : null,
     h('p', { class: 'note' }, t('results.rules')),
     overrideBlock(st)), { label: st.name });
@@ -181,11 +182,13 @@ function overrideBlock(st) {
 function compareTable(st) {
   const b = st.backtest || {};
   const rows = [
+    [t('backtest.k.trades'), b.trades != null ? fmt.int(b.trades) : '—', st.trades ? fmt.int(st.trades) : '—'],
     [t('results.win'), b.win != null ? `${b.win}%` : '—', st.win != null ? `${st.win}%` : '—'],
     [t('results.avg'), b.avg != null ? fmt.pct(b.avg) : '—', st.avg != null ? fmt.pct(st.avg) : '—'],
-    [t('results.pf'), b.pf != null ? fmt.num(b.pf, 2) : '—', st.pf != null ? fmt.num(st.pf, 2) : '—'],
+    // A profit factor is undefined when nothing lost: say so instead of showing a blank.
+    [t('results.pf'), b.pf != null ? fmt.num(b.pf, 2) : b.trades ? t('backtest.noLosses') : '—', st.pf != null ? fmt.num(st.pf, 2) : st.trades ? t('backtest.noLosses') : '—'],
     [t('results.dd'), b.dd != null ? fmt.pct(b.dd, 1) : '—', st.paperDd != null ? fmt.pct(st.paperDd, 1) : '—'],
-    [t('results.vsNifty'), '—', st.vsNifty != null ? fmt.pct(st.vsNifty, 1) : '—'],
+    [t('results.vsNifty'), b.vsNifty != null ? fmt.pct(b.vsNifty, 1) : '—', st.vsNifty != null ? fmt.pct(st.vsNifty, 1) : '—'],
   ];
   return h('table', { class: 'cmp' },
     h('thead', null, h('tr', null, h('th', { scope: 'col' }, h('span', { class: 'visually-hidden' }, t('results.strategies'))),

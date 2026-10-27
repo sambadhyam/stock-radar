@@ -12,6 +12,7 @@ Use Chrome with **⋮ → Desktop site** ticked for every step.
 | [Api.gs](Api.gs) | `Api` |
 | [Signals.gs](Signals.gs) | `Signals` (Phase 2) |
 | [Review.gs](Review.gs) | `Review` (Phase 3) |
+| [Lab.gs](Lab.gs) | `Lab` (Phase 5) |
 | [Core.gs](Core.gs) | `Core` (Phase 2; the same file as `core/core.js`) |
 | [appsscript.json](appsscript.json) | `appsscript.json` (required: India time and the exact permissions the engine may use) |
 
@@ -21,7 +22,7 @@ Use Chrome with **⋮ → Desktop site** ticked for every step.
 
 1. Open your **Stock Radar DB** sheet → **Extensions → Apps Script**.
 2. Rename the starting file: tap **⋮** next to `Code.gs` → **Rename** → type `Setup` → Enter.
-3. Add the other files: tap **+** next to **Files** → **Script**, name it `Data`. Repeat for `Engine`, `Api`, `Signals`, `Review` and `Core`.
+3. Add the other files: tap **+** next to **Files** → **Script**, name it `Data`. Repeat for `Engine`, `Api`, `Signals`, `Review`, `Lab` and `Core`.
 4. Fill each file, one at a time:
    1. In another tab, open the file on GitHub (links in the table above).
    2. Tap the **copy icon** (two small squares) at the top right of the code. If you don't see it, tap **Raw**, then long-press → **Select all** → **Copy**.
@@ -44,11 +45,12 @@ You never paste keys into these files.
 3. **Stock Radar → 2. Set up keys.** Fill in the six boxes and tap **Save keys**:
    - Angel One client ID, PIN, SmartAPI API key, TOTP secret key
    - Telegram bot token and chat ID
-   - (Gemini is optional, leave it empty for now)
+   - (Gemini is optional, for AI news summaries: leave it empty, or see "AI summaries" below)
 4. **Stock Radar → 3. Run all tests.** Takes 1–2 minutes. You get a results box, a Telegram message, a test email, and the same results in the **Checks** sheet.
 5. **Stock Radar → 4. Load stock lists.** Takes 1–3 minutes. Fills the **Symbols** sheet with Nifty 50/200/500 stocks, 3 core ETFs and the main indices.
 6. **Stock Radar → 5. Start daily schedule.**
 7. **Stock Radar → 6. Load price history.** Google asks for one more permission the first time (Drive, for the price files). About two years of daily candles for every stock go into a **Stock Radar Data** folder in your Drive. The first batch takes up to 4 minutes; the rest load by themselves, and Telegram tells you when it's done.
+8. Nothing to do for the backtest: after the first close it starts by itself in the evening and sends the **Backtest Baseline** report (see "Backtests" below). **Stock Radar → 7. Backtest** starts it any time.
 
 **What happens next:** on every trading day:
 - **08:50** pre-market check on Telegram, with the market regime.
@@ -175,7 +177,7 @@ Every threshold the strategies use is a row in **Config** (keys such as `orb.vol
 | Intraday | Opening-range breakout, VWAP reclaim, EMA 9/21 cross, Gap and go / gap fill | Nifty 50 + watchlist | After each 5-minute bar, 09:20–14:30; valid until 15:15 |
 | Swing (2–10 days) | Base breakout, Pullback to 20 EMA, RSI(2) dip in uptrend, MACD trend cross | Nifty 200 | After the close |
 | Medium (1–6 months) | Trend template, Relative strength leaders, Near 52-week high | Nifty 200 | After the close |
-| Long (12+ months) | Quality-value score (needs the Fundamentals sheet, Phase 5), Holding guard (exit warnings for stocks in the Holdings sheet) | Nifty 500 + ETFs | After the close |
+| Long (12+ months) | Quality-value score (needs fundamentals: app → More → Fundamentals), Holding guard (exit warnings for your holdings: app → More → Portfolio) | Nifty 500 + ETFs | After the close |
 
 Every signal must pass: reward-to-risk of at least 1.5 (intraday) or 2 (others), an average traded value of at least ₹10 crore a day, a stop no further than the horizon's limit, and a market regime the strategy is allowed to trade in. Swing and medium buys need a Bull or Neutral regime. No signals go out while the price history is missing or stale.
 
@@ -246,6 +248,52 @@ Send me a screenshot of the results box (or the Checks sheet) when you're done.
 Paste six files (every file except Setup; open each link, select all, copy; then in Apps Script select all in the matching file, paste, save):
 [Core.gs](Core.gs) → `Core`, [Signals.gs](Signals.gs) → `Signals`, [Review.gs](Review.gs) → `Review`, [Engine.gs](Engine.gs) → `Engine`, [Api.gs](Api.gs) → `Api`, [Data.gs](Data.gs) → `Data`.
 Then publish the web app again: **Deploy → Manage deployments → ✏️ → Version: New version → Deploy**.
+
+## Update 0.6.0: Phase 5 (backtests, portfolio, fundamentals, AI summaries)
+
+Every `.gs` file changed and there is one new file. `appsscript.json` is unchanged.
+
+1. In Apps Script add a new file: **+** next to **Files** → **Script** → name it `Lab`.
+2. Paste these eight files over what is there (open each link, select all, copy; in Apps Script click in the matching file, select all, paste):
+   [Lab.gs](https://raw.githubusercontent.com/sambadhyam/stock-radar/main/apps-script/Lab.gs) → `Lab`,
+   [Core.gs](https://raw.githubusercontent.com/sambadhyam/stock-radar/main/apps-script/Core.gs) → `Core`,
+   [Signals.gs](https://raw.githubusercontent.com/sambadhyam/stock-radar/main/apps-script/Signals.gs) → `Signals`,
+   [Review.gs](https://raw.githubusercontent.com/sambadhyam/stock-radar/main/apps-script/Review.gs) → `Review`,
+   [Engine.gs](https://raw.githubusercontent.com/sambadhyam/stock-radar/main/apps-script/Engine.gs) → `Engine`,
+   [Api.gs](https://raw.githubusercontent.com/sambadhyam/stock-radar/main/apps-script/Api.gs) → `Api`,
+   [Data.gs](https://raw.githubusercontent.com/sambadhyam/stock-radar/main/apps-script/Data.gs) → `Data`,
+   [Setup.gs](https://raw.githubusercontent.com/sambadhyam/stock-radar/main/apps-script/Setup.gs) → `Setup`.
+3. Save, go back to the sheet and reload it.
+4. Publish the web app again: **Deploy → Manage deployments → ✏️ → Version: New version → Deploy**.
+5. **Stock Radar → 1. Create sheets.** Adds the new settings to **Config** and the new columns to **Holdings** and **Backtests**. Nothing else changes.
+
+That's all. The schedule keeps running, and the backtest starts by itself after the next close.
+
+## Backtests
+
+The engine replays history through exactly the rules of the live paper record (same strategy code, fills, exits and Zerodha charges) and sends a **🧪 Backtest Baseline** report to Telegram and email. The numbers also go into the **Backtests** sheet, the **Reports** list and the app (More → Backtest lab, and each strategy card in Results).
+
+- **What it tests:** the swing and medium strategies on the Nifty 200 (`backtestUniverse`) over up to 10 years (`backtestYears`), and the intraday strategies on the Nifty 50 + watchlist over the last 60 sessions of 5-minute prices (`intradayHistoryDays`), with your current intraday switches.
+- **When it runs:** only outside market hours (after 18:15 on trading days, any time on holidays and weekends), in steps of about 4 minutes. It uses at most 30 trigger minutes in any 24 hours (`backtestMinutesPerDay`, also in the app's Settings), because Google gives the whole engine 90 a day and the live work needs about 45. The first run downloads about ten years of prices, so it is usually done on the first or second evening; the app shows how far it has got.
+- **Refresh:** a Saturday re-run once the last one is 30 days old (`backtestRefreshDays`); later runs only fetch what is new. **Stock Radar → 7. Backtest** runs it again any time.
+- **Verdicts:** ✅ positive after charges with a profit factor of at least 1.3, ⚠️ positive but thin, ⛔ loses after charges, · fewer than 30 trades.
+- **Read with care:** today's index list is used for the whole period, so stocks that dropped out (often the losers) are missing and the results look better than they were. Fundamentals are not backtested (only today's values are known). Slippage is not included. Intraday uses 5-minute bars, a little coarser than the live 1-minute check. Angel One does not say how far back it keeps daily candles, so some stocks may have less than 10 years. A backtest is for dropping bad ideas, not proving good ones.
+
+Your own tests run in the app (More → Backtest lab → Test it yourself): another stock list, period, filter or strategy setting, on this engine's history, without changing the engine.
+
+## Portfolio and fundamentals
+
+Both are imported in the app, not in the sheet:
+- **More → Portfolio → Import holdings file:** the holdings XLSX from Zerodha Console (Portfolio → Holdings → download) or a Kite holdings CSV. The file is read on your phone and saved only to the **Holdings** sheet. After each close the engine values your holdings and the closing summary lists them; the holding guard sends exit warnings, and so do your own stop-loss and target per holding. Add a buy date for a note before a holding completes 12 months.
+- **More → Fundamentals:** a Screener.in export (CSV or XLSX). Columns are matched by name and you can fix any match before importing; missing values stay empty. These feed the long-term list and the quality-value strategy.
+
+## AI summaries (optional, off by default)
+
+1. Get a free key at [aistudio.google.com](https://aistudio.google.com) → **Get API key**.
+2. In the sheet: **Stock Radar → 2. Set up keys** → paste it in the Gemini box → **Save keys**. Never paste it into a chat or into GitHub.
+3. In the app: **Settings → AI summaries → AI news summaries** on, then **Save**.
+
+A stock's sheet in the app then has **Summarise recent news**: three short bullets from Gemini about its latest Google News headlines, labelled "AI summary — not a signal". Only the stock's name and the public headlines are sent, never your holdings or keys. The model is `aiModel` in Config (`gemini-3.5-flash-lite`).
 
 ## Updating later
 

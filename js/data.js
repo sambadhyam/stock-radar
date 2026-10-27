@@ -28,6 +28,12 @@ function adapt(b) {
     reportDue: (n) => (b.paperStart ? Date.parse(b.paperStart + 'T16:00:00+05:30') + n * 86400000 : null),
     fundamentals: b.fundamentals || {},
     scan: { long: [], medium: [], swing: [], etfs: [], ...(b.scan || {}) },
+    // Phase 5 (absent from older engines, so the screens get safe defaults)
+    backtest: b.backtest || { state: 'none' },
+    portfolio: b.portfolio || null,
+    ai: b.ai || { enabled: false, key: false },
+    params: b.params || {},
+    labSettings: b.labSettings || null,
   };
 }
 

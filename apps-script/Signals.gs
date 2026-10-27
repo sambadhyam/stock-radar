@@ -653,7 +653,7 @@ var AlertBook = {
     var last = {}, now = MarketCal.now().getTime();
     this.recent(3000).forEach(function (a) { var k = a.symbol + '|' + a.strategy + '|' + a.track; if (!last[k] || a.createdAt > last[k]) last[k] = a.createdAt; });
     return signals.filter(function (sig) {
-      var days = sig.strategy === 'holding-guard' ? P['guard.cooldownDays'] : sig.horizon === 'SWING' ? P['swing.cooldownDays'] : sig.horizon === 'MEDIUM' ? P['medium.cooldownDays'] : P['long.cooldownDays'];
+      var days = SRCore.cooldownDays(sig.strategy, sig.horizon, P);
       var prev = last[sig.symbol + '|' + sig.strategy + '|' + (sig.shadow ? 'shadow' : 'main')];
       return !(prev && now - prev < days * 86400000);
     });

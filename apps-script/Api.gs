@@ -114,6 +114,13 @@ var AppApi = {
     if (action === 'chart') return this.chart(String(req.symbol || ''), String(req.alertId || ''));
     if (action === 'settings') return this.saveSettings(req.settings || {}, req.strategies || {});
     if (action === 'news') return this.news(String(req.symbol || ''));
+    // Phase 5: backtest lab, holdings, fundamentals and AI summaries
+    if (action === 'backtest') return LabData.overview();
+    if (action === 'btData') return req.kind === 'intraday' ? LabData.intraday(req.symbols, !!req.market) : LabData.daily(req.symbols, !!req.market);
+    if (action === 'btStart') { Backtest.start('app'); Backtest.schedule(30000); return Backtest.info(); }
+    if (action === 'holdings') return this.holdings(req);
+    if (action === 'fundamentals') return this.lock(function () { return FundImport.save(req.rows, String(req.source || 'App import')); });
+    if (action === 'summary') return AiSummary.summarise(String(req.symbol || ''));
     if (action === 'testTelegram') {
       Notify.telegram('✅ Test message from the Stock Radar app. Alerts arrive in this chat.');
       return { sent: true };
@@ -135,7 +142,7 @@ var AppApi = {
     var book = StrategyBook.load(), rows = Tables.read('Alerts').rows;
     var main = rows.filter(function (r) { return (r.track || 'main') !== 'shadow' && r.createdAt instanceof Date; });
     var trades = Review.closedTrades(rows).filter(function (x) { return x.track === 'main'; });
-    var cap = Review.sizing().capital, rules = Review.rules();
+    var cap = Review.sizing().capital, rules = Review.rules(), bt = Backtest.summary();
 
     var strategies = SRCore.STRATEGIES.map(function (st) {
       var mine = trades.filter(function (x) { return x.strategy === st.id; }).sort(function (a, b) { return a.exitT - b.exitT; });
@@ -147,7 +154,7 @@ var AppApi = {
       return {
         id: st.id, name: st.name, horizon: self.lower(st.horizon), status: self.statusKey(b.status), enabled: b.enabled !== false,
         override: b.override || '', trades: mine.length, days: m.days, outcomes: outcomes, win: m.winRatePct, avg: m.expectancyPct, pf: m.profitFactor,
-        vsNifty: m.avgAlphaPct, paperDd: m.maxDrawdownPct === null ? null : -m.maxDrawdownPct, backtest: null,
+        vsNifty: m.avgAlphaPct, paperDd: m.maxDrawdownPct === null ? null : -m.maxDrawdownPct, backtest: self.backtestOf(st.id, bt),
         verdict: SRCore.graduate(m, rules).reason,
       };
     });
@@ -187,7 +194,40 @@ var AppApi = {
       reports: this.reports(), paperStart: Secrets.props().getProperty('PAPER_START') || '',
       readinessSent: (Secrets.props().getProperty('READINESS_SENT') || '').split(',').filter(Boolean).map(Number),
       settings: this.settings(book), rules: rules,
+      backtest: Backtest.info(), portfolio: Portfolio.view(), ai: AiSummary.status(), params: Scans.params(),
+      labSettings: {
+        rates: Review.rates(), sizing: Review.sizing(), lastEntryMinute: Config.minutesOf('noEntriesAfter'), expiryMinute: Config.minutesOf('intradayExpiry'),
+        cooldownMinutes: Number(Config.get('alertCooldownMinutes')) || 60,
+      },
     };
+  },
+
+  /** A strategy's backtest numbers in the shape the app's comparison table uses. */
+  backtestOf: function (id, bt) {
+    var x = bt && bt.s && bt.s[id];
+    if (!x || !x[0]) return null;
+    var intra = SRCore.strategy(id) && SRCore.strategy(id).horizon === 'INTRADAY', part = intra ? bt.intraday : bt.daily;
+    return { trades: x[0], days: x[1], win: x[2], avg: x[3], pf: x[4], dd: x[5] === null ? null : -x[5], vsNifty: x[6], cagr: x[7], verdict: x[8], from: part.from, to: part.to };
+  },
+
+  /** Run a change under the script lock, so it never collides with the engine's own writes. */
+  lock: function (fn) {
+    var lock = LockService.getScriptLock();
+    if (!lock.tryLock(8000)) throw new Error('The engine is busy (probably the end-of-day run). Try again in a few minutes.');
+    try { return fn(); } finally { lock.releaseLock(); }
+  },
+
+  /** Holdings from the app: replace them all, change one holding's levels, or clear them. */
+  holdings: function (req) {
+    var mode = String(req.mode || '');
+    return this.lock(function () {
+      var r;
+      if (mode === 'replace') r = Portfolio.replace(req.rows, String(req.source || 'App import'));
+      else if (mode === 'edit') r = Portfolio.edit(String(req.symbol || ''), req.patch || {});
+      else if (mode === 'clear') r = Portfolio.clear();
+      else throw new Error('Unknown holdings request');
+      return { result: r, portfolio: Portfolio.view() };
+    });
   },
 
   market: function () {
@@ -273,15 +313,16 @@ var AppApi = {
   },
 
   /** On/off settings the app may change (all TRUE/FALSE in the Config sheet). */
-  SWITCHES: ['telegram', 'emailDigest', 'paperAlerts', 'intradayFollowNifty', 'intradayBlockBuysInBear', 'intradayBlockShortsInBull', 'intradayOneAlertPerStock'],
+  SWITCHES: ['telegram', 'emailDigest', 'paperAlerts', 'intradayFollowNifty', 'intradayBlockBuysInBear', 'intradayBlockShortsInBull', 'intradayOneAlertPerStock', 'aiSummaries'],
+  /** Numbers the app may change, with their allowed range. */
+  NUMBERS: { realCapital: [1000, 1e10], paperCapital: [1000, 1e10], riskPct: [0.1, 5], maxPerStockPct: [1, 100], portfolioMaxStockPct: [5, 100], portfolioMaxSectorPct: [10, 100], backtestYears: [3, 15], intradayHistoryDays: [20, 120], backtestMinutesPerDay: [10, 40] },
+  WHOLE: ['backtestYears', 'intradayHistoryDays', 'backtestMinutesPerDay'],
 
   settings: function (book) {
     var c = Config.all(), off = [], out;
     Object.keys(book).forEach(function (id) { if (!book[id].enabled) off.push(id); });
-    out = {
-      realCapital: c.realCapital, paperCapital: c.paperCapital, riskPct: c.riskPct, maxPerStockPct: c.maxPerStockPct,
-      watchlist: Config.symbols('watchlist'), strategiesOff: off,
-    };
+    out = { watchlist: Config.symbols('watchlist'), strategiesOff: off };
+    Object.keys(this.NUMBERS).forEach(function (k) { out[k] = c[k]; });
     this.SWITCHES.forEach(function (k) { out[k] = c[k] === true; });
     return out;
   },
@@ -336,13 +377,13 @@ var AppApi = {
     var lock = LockService.getScriptLock();
     if (!lock.tryLock(8000)) throw new Error('The engine is busy (probably the end-of-day run). Try again in a few minutes.');
     try {
-      var nums = { realCapital: [1000, 1e10], paperCapital: [1000, 1e10], riskPct: [0.1, 5], maxPerStockPct: [1, 100] };
+      var nums = this.NUMBERS, whole = this.WHOLE;
       var write = {};
       Object.keys(nums).forEach(function (k) {
         if (s[k] === undefined) return;
         var v = Number(s[k]);
         if (!(isFinite(v) && v >= nums[k][0] && v <= nums[k][1])) throw new Error(k + ' is out of range');
-        write[k] = String(v);
+        write[k] = String(whole.indexOf(k) >= 0 ? Math.round(v) : v);
       });
       this.SWITCHES.forEach(function (k) { if (s[k] !== undefined) write[k] = s[k] === true ? 'TRUE' : 'FALSE'; });
       if (s.watchlist !== undefined) {

@@ -16,7 +16,7 @@
 var SRCore = (function () {
   'use strict';
 
-  var VERSION = '0.5.1';
+  var VERSION = '0.6.0';
   var OPEN_MIN = 555;   // 09:15 IST in minutes after midnight
   var CLOSE_MIN = 930;  // 15:30 IST
   var ALL_REGIMES = ['BULL', 'NEUTRAL', 'BEAR', 'HIGH_VOL'];
@@ -276,17 +276,17 @@ var SRCore = (function () {
     if (num(vNow)) out.reasons.push('India VIX ' + vNow.toFixed(2) + (num(vJump) ? ' (' + (vJump >= 0 ? '+' : '−') + Math.abs(vJump).toFixed(0) + '% in 5 days)' : '') + '.');
     else out.reasons.push('India VIX history is missing, so volatility was not checked.');
     if (num(breadthPct)) out.reasons.push(round(breadthPct, 0) + '% of Nifty 200 stocks are above their 50-day average.');
-
-    if (num(vNow) && (vNow >= P['regime.vixHigh'] || (num(vJump) && vJump >= P['regime.vixJumpPct'] && vNow >= P['regime.vixHigh'] * 0.8))) {
-      out.state = 'HIGH_VOL';
-    } else if (above200 && trendUp && (!num(breadthPct) || breadthPct >= P['regime.breadthBull'])) {
-      out.state = 'BULL';
-    } else if (!above200 && (!trendUp || (num(breadthPct) && breadthPct < P['regime.breadthBear']))) {
-      out.state = 'BEAR';
-    } else {
-      out.state = 'NEUTRAL';
-    }
+    out.state = regimeState(c[i], s50, s200, vNow, vJump, breadthPct, P);
     return out;
+  }
+
+  /** The regime rule itself, from one day's numbers (shared by regime() and the backtester's day-by-day context). */
+  function regimeState(close, s50, s200, vNow, vJump, breadthPct, P) {
+    var above200 = close > s200, trendUp = s50 > s200;
+    if (num(vNow) && (vNow >= P['regime.vixHigh'] || (num(vJump) && vJump >= P['regime.vixJumpPct'] && vNow >= P['regime.vixHigh'] * 0.8))) return 'HIGH_VOL';
+    if (above200 && trendUp && (!num(breadthPct) || breadthPct >= P['regime.breadthBull'])) return 'BULL';
+    if (!above200 && (!trendUp || (num(breadthPct) && breadthPct < P['regime.breadthBear']))) return 'BEAR';
+    return 'NEUTRAL';
   }
 
   /** Percent of the given candle series whose last close is above its 50-day average. */
@@ -308,7 +308,11 @@ var SRCore = (function () {
 
   /** Weighted 3/6/9/12-month return, minus the same for Nifty 50, `back` bars before the end. */
   function rsRaw(closes, niftyCloses, back) {
-    var i = closes.length - 1 - back, j = niftyCloses.length - 1 - back;
+    return rsAt(closes, closes.length - 1 - back, niftyCloses, niftyCloses.length - 1 - back);
+  }
+
+  /** The same, at bar i of a stock's closes and bar j of Nifty 50's closes. Null without 252 bars of history. */
+  function rsAt(closes, i, niftyCloses, j) {
     if (i < 252 || j < 252) return null;
     var r = function (a, k, n) { return a[k - n] > 0 ? a[k] / a[k - n] - 1 : 0; };
     var mine = 0.4 * r(closes, i, 63) + 0.2 * r(closes, i, 126) + 0.2 * r(closes, i, 189) + 0.2 * r(closes, i, 252);
@@ -590,6 +594,10 @@ var SRCore = (function () {
       var chPrev = maxOf(x.c, i - L, i - 1) - P['guard.atrMult'] * a[i - 1];
       if (c < ch && x.c[i - 1] >= chPrev) reasons.push('Fell through the trailing stop of ' + inr(ch) + ' (highest close of ' + L + ' days minus ' + P['guard.atrMult'] + ' ATR).');
     }
+    // Your own levels for this holding (set in the app's Portfolio screen), on the day they are crossed.
+    var myStop = Number(o.holding.stop), myTarget = Number(o.holding.target);
+    if (myStop > 0 && c <= myStop && x.c[i - 1] > myStop) reasons.push('Closed at ' + inr(c) + ', at or below your stop-loss of ' + inr(myStop) + '.');
+    if (myTarget > 0 && c >= myTarget && x.c[i - 1] < myTarget) reasons.push('Closed at ' + inr(c) + ', at or above your target of ' + inr(myTarget) + '. Consider booking some profit.');
     if (!reasons.length) return null;
     var avg = Number(o.holding.avgPrice);
     if (avg > 0) reasons.push('Against your average price of ' + inr(avg) + ' this holding is ' + (c >= avg ? 'up ' : 'down ') + pct(Math.abs(c / avg - 1) * 100) + '.');
@@ -1012,6 +1020,60 @@ var SRCore = (function () {
   }
 
   /**
+   * The paper result of a simulated trade (from simulateTrade), the same way for the live record and the backtester.
+   * sizing: {capital, riskPct, maxPer, fractional}. The quantity comes from positionSize(); with fractional (backtests)
+   * it is not rounded down to whole shares, so expensive stocks still get a rupee result. Percent results use at least
+   * one share, so a stock too pricey for the virtual account still counts in the stats.
+   * Returns {qty, netPct, grossPnl, charges, netPnl, mark, unrealised, holdDays}; netPct and the rupee fields are null
+   * until the trade is closed (an open trade gets mark and unrealised instead).
+   */
+  function paperResult(direction, stop, s, sizing, rates, intraday) {
+    var out = { qty: 0, netPct: null, grossPnl: null, charges: null, netPnl: null, mark: null, unrealised: null, holdDays: null };
+    if (!s || s.fillPrice === null || s.fillPrice === undefined) return out;
+    var qty = positionSize(sizing.capital, sizing.riskPct, s.fillPrice, stop, sizing.maxPer).qty;
+    if (sizing.fractional) {
+      var risk = Math.abs(s.fillPrice - stop);
+      qty = risk > 0 ? Math.min(sizing.capital * sizing.riskPct / 100 / risk, sizing.capital * (sizing.maxPer || 100) / 100 / s.fillPrice) : 0;
+      qty = Math.max(0, Math.floor(qty * 1000) / 1000);
+    }
+    out.qty = qty;
+    var closed = s.state === 'CLOSED', price = closed ? s.exitPrice : s.lastPrice;
+    if (!closed) {
+      if (qty > 0 && price > 0) { out.mark = price; out.unrealised = tradeResult(direction, qty, s.fillPrice, price, intraday, rates).netPnl; }
+      return out;
+    }
+    out.netPct = tradeResult(direction, Math.max(qty, sizing.fractional ? qty : 1), s.fillPrice, price, intraday, rates).netPct;
+    if (qty > 0) {
+      var real = tradeResult(direction, qty, s.fillPrice, s.exitPrice, intraday, rates);
+      out.grossPnl = real.grossPnl; out.charges = real.charges; out.netPnl = real.netPnl;
+    }
+    out.holdDays = intraday ? round((s.exitT - s.fillT) / 60000 / 375, 3) : s.bars;
+    return out;
+  }
+
+  /** Nifty 50's move in percent between two moments, from its bars of that session: last close before fromT to last close at toT. */
+  function niftyMove(bars, fromT, toT) {
+    if (!bars || !bars.length || !num(fromT) || !num(toT)) return null;
+    var before = null, end = null;
+    for (var i = 0; i < bars.length; i++) {
+      if (bars[i].t < fromT) before = bars[i].c;
+      if (bars[i].t <= toT) end = bars[i].c;
+    }
+    if (before === null) before = bars[0].o;
+    return before > 0 && end !== null ? (end / before - 1) * 100 : null;
+  }
+
+  /** Calendar days before the same strategy may alert the same stock again (daily strategies). */
+  function cooldownDays(strategyId, horizon, P) {
+    return strategyId === 'holding-guard' ? P['guard.cooldownDays'] : horizon === 'SWING' ? P['swing.cooldownDays'] : horizon === 'MEDIUM' ? P['medium.cooldownDays'] : P['long.cooldownDays'];
+  }
+
+  /** Trading days a signal of this horizon stays valid (intraday: the same session). */
+  function holdDaysFor(horizon, P) {
+    return horizon === 'INTRADAY' ? 0 : Math.max(1, Math.round(P[horizonKey(horizon) + '.holdDays']));
+  }
+
+  /**
    * Strategy metrics from closed trades [{netPct, netPnl?, exitT, dayT?, holdDays?, alphaPct?}], in exit order.
    * Drawdown is on an equity curve that starts at `capital` (rupee results when every trade has one,
    * otherwise percent results compounded). Profit factor is null while there are no losses.
@@ -1085,6 +1147,234 @@ var SRCore = (function () {
     };
   }
 
+  /* ============================ Backtesting ============================ */
+  // The same strategies, checks, fills, exits, charges and metrics as the live paper record, replayed one
+  // session (or one 5-minute bar) at a time. Nothing looks ahead: each decision uses data up to that bar only,
+  // and every trade is judged on the bars that came after it.
+
+  /** day number → position, for a list of day numbers. */
+  function dayIndexOf(days) { var m = {}; for (var j = 0; j < days.length; j++) m[days[j]] = j; return m; }
+
+  /**
+   * For each day in `days`, the index of the latest time on or before it; −1 when there is none or it is more
+   * than maxGap calendar days old (so a suspended or delisted stock does not linger).
+   */
+  function alignTimes(times, days, maxGap) {
+    var out = new Array(days.length), i = -1, n = times ? times.length : 0, gap = maxGap || 7;
+    for (var j = 0; j < days.length; j++) {
+      while (i + 1 < n && istDay(times[i + 1]) <= days[j]) i++;
+      out[j] = i >= 0 && days[j] - istDay(times[i]) <= gap ? i : -1;
+    }
+    return out;
+  }
+
+  /**
+   * The market as it stood at each Nifty 50 close, for a daily backtest: the regime and every stock's
+   * relative-strength percentile, each worked out only from data up to that day, with the live rules.
+   * input: {nifty, vix, series: {SYM: daily candles, or {t: [times], c: [closes]} to save memory}, params}
+   * Returns {days, regime, breadth, rs: {SYM: [percentile|null]}, niftyClose} (arrays indexed by Nifty day).
+   */
+  function btContext(input) {
+    var P = input.params || params(), nifty = input.nifty || [], vix = input.vix || [], series = input.series || {};
+    var D = nifty.length, days = new Array(D), j;
+    for (j = 0; j < D; j++) days[j] = istDay(nifty[j].t);
+    var nc = pluck(nifty, 'c'), n50 = sma(nc, 50), n200 = sma(nc, 200), vAt = alignTimes(pluck(vix, 't'), days, 7);
+    var up = nulls(D), cnt = nulls(D), raw = {}, syms = Object.keys(series).sort();
+    for (j = 0; j < D; j++) { up[j] = 0; cnt[j] = 0; }
+    syms.forEach(function (sym) {
+      var k = series[sym] || [], col = !Array.isArray(k) && k.c ? k : null;
+      var c = col ? col.c : pluck(k, 'c'), tt = col ? col.t : pluck(k, 't');
+      if (c.length < 50) return;
+      var m50 = sma(c, 50), at = alignTimes(tt, days, 7), r = nulls(D);
+      for (var jj = 0; jj < D; jj++) {
+        var i = at[jj];
+        if (i < 0) continue;
+        if (num(m50[i])) { cnt[jj]++; if (c[i] > m50[i]) up[jj]++; }
+        r[jj] = rsAt(c, i, nc, jj);
+      }
+      raw[sym] = r;
+    });
+    var rs = {}, have = syms.filter(function (s) { return raw[s]; });
+    have.forEach(function (s) { rs[s] = nulls(D); });
+    for (j = 0; j < D; j++) {
+      var list = [];
+      for (var q = 0; q < have.length; q++) { var v = raw[have[q]][j]; if (num(v)) list.push({ s: have[q], v: v }); }
+      list.sort(function (a, b) { return a.v - b.v; });
+      for (q = 0; q < list.length; q++) rs[list[q].s][j] = round(list.length > 1 ? q / (list.length - 1) * 100 : 50, 2);
+    }
+    var regime = new Array(D), breadth = nulls(D);
+    for (j = 0; j < D; j++) {
+      var b = cnt[j] ? up[j] / cnt[j] * 100 : null;
+      breadth[j] = num(b) ? round(b, 1) : null;
+      if (j < 199) { regime[j] = 'UNKNOWN'; continue; }
+      var vi = vAt[j], vNow = null, vJump = null;
+      if (vi >= 5) { vNow = vix[vi].c; vJump = vix[vi - 5].c > 0 ? (vNow / vix[vi - 5].c - 1) * 100 : null; }
+      regime[j] = regimeState(nc[j], n50[j], n200[j], vNow, vJump, b, P);
+    }
+    return { days: days, regime: regime, breadth: breadth, rs: rs, niftyClose: nc };
+  }
+
+  /** One finished backtest trade, or a note of why there is none ('open' at the end of the data, 'notTriggered'). */
+  function btTrade(symbol, st, sig, track, regimeName0, dayT, s, sizing, rates, intraday, niftyPct) {
+    if (s.state !== 'CLOSED') return 'open';
+    if (s.outcome === 'NOT_TRIGGERED') return 'notTriggered';
+    var r = paperResult(sig.direction, sig.stop, s, sizing, rates, intraday);
+    var alpha = num(niftyPct) && num(r.netPct) ? round(r.netPct - niftyPct, 3) : null;
+    return {
+      symbol: symbol, strategy: st.id, horizon: st.horizon, direction: sig.direction, track: track, regime: regimeName0,
+      dayT: dayT, fillT: s.fillT, exitT: s.exitT, outcome: s.outcome, entry: sig.entry, stop: sig.stop, target: sig.target1,
+      fill: s.fillPrice, exit: s.exitPrice, qty: r.qty, netPct: r.netPct, netPnl: r.netPnl, holdDays: r.holdDays, alphaPct: alpha,
+      blocked: sig.blocked || '',
+    };
+  }
+
+  /**
+   * Replay the daily strategies over one stock's full history with the day-by-day context from btContext.
+   * opts: {params, strategies, ctx, sizing {capital, riskPct, maxPer, fractional}, rates, from, to (day numbers),
+   *        shadows (default true: also signals the regime blocked), ignoreRegime (treat those as taken)}
+   * Repeats follow the live cooldowns; each signal is judged on the following daily candles until it expires.
+   * Returns {trades, open, notTriggered}: trades still open at the end of the data are counted, not judged.
+   */
+  function backtestDaily(symbol, candles, opts) {
+    opts = opts || {};
+    var P = opts.params || params(), ctx = opts.ctx, out = { trades: [], open: 0, notTriggered: 0 };
+    if (!ctx || !candles || candles.length < 60) return out;
+    var x = new Daily(candles), n = x.n, at = ctx._index || (ctx._index = dayIndexOf(ctx.days));
+    var rs = (ctx.rs && ctx.rs[symbol]) || [], sizing = opts.sizing || { capital: 100000, riskPct: 1, maxPer: 10, fractional: true };
+    var list = wanted(opts.strategies, ['daily']), last = {}, nc = ctx.niftyClose || [];
+    for (var i = 30; i < n - 1; i++) {
+      var dn = istDay(candles[i].t);
+      if ((opts.from && dn < opts.from) || (opts.to && dn > opts.to)) continue;
+      var j = at[dn];
+      if (j === undefined || !ctx.regime[j] || ctx.regime[j] === 'UNKNOWN') continue;
+      var o = { rsPct: num(rs[j]) ? rs[j] : null, rsPrevPct: j > 0 && num(rs[j - 1]) ? rs[j - 1] : null }, tv = null;
+      for (var q = 0; q < list.length; q++) {
+        var st = list[q], raw = null;
+        try { raw = DAILY[st.id](x, i, P, o); } catch (e) { raw = null; }
+        if (!raw) continue;
+        if (tv === null) tv = x.tradedValueCr(i, 20);
+        var f = finalize(raw, st, P, { regime: { state: ctx.regime[j] }, tradedValueCr: tv, track: null });
+        var sig = f.signal || f.shadow;
+        if (!sig || (f.shadow && opts.shadows === false && !opts.ignoreRegime)) continue;
+        var track = f.signal || opts.ignoreRegime ? 'main' : 'shadow', key = st.id + '|' + track;
+        if (last[key] !== undefined && candles[i].t - last[key] < cooldownDays(st.id, st.horizon, P) * 86400000) continue;
+        last[key] = candles[i].t;
+        var hd = holdDaysFor(st.horizon, P), complete = i + hd <= n - 1;
+        var s = simulateTrade({ direction: sig.direction, entryLow: sig.entryLow, entryHigh: sig.entryHigh, stop: sig.stop, target: sig.target1 },
+          candles.slice(i + 1, Math.min(n, i + hd + 1)), { expiryMs: complete ? candles[i + hd].t : null, nowMs: complete ? candles[n - 1].t : null, barMs: 0 });
+        var np = null;
+        if (s.state === 'CLOSED' && num(s.fillT)) {
+          var jf = at[istDay(s.fillT)], jx = at[istDay(s.exitT)];
+          if (jf !== undefined && jx !== undefined && jf > 0 && nc[jf - 1] > 0) np = (nc[jx] / nc[jf - 1] - 1) * 100;
+        }
+        var t = btTrade(symbol, st, sig, track, ctx.regime[j], candles[i].t, s, sizing, opts.rates || {}, false, np);
+        if (t === 'open') out.open++; else if (t === 'notTriggered') out.notTriggered++; else out.trades.push(t);
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Replay the intraday strategies over one stock's 5-minute history, bar by bar, with the live rules:
+   * yesterday's and today's bars only, no entries after lastEntryMinute, your switches (block), the day's
+   * direction (niftyBars + followNifty), one alert per stock per day (or one per strategy and direction with a
+   * cooldown), and each trade judged on the following 5-minute bars until expiryMinute. The live record uses
+   * 1-minute candles, so these results are a little coarser; a bar touching both the stop and the target is a stop.
+   * opts: {params, strategies, niftyBars, regimeByDay {day: state}, followNifty, block, onePerStock (default true),
+   *        cooldownMinutes (60), lastEntryMinute (870), expiryMinute (915), sizing, rates, shadows (default true)}
+   */
+  function backtestIntraday(symbol, bars, opts) {
+    opts = opts || {};
+    var P = opts.params || params(), out = { trades: [], open: 0, notTriggered: 0 };
+    if (!bars || bars.length < 100) return out;
+    var byDay = {}, days = [], i;
+    for (i = 0; i < bars.length; i++) { var dd = istDay(bars[i].t); if (!byDay[dd]) { byDay[dd] = []; days.push(dd); } byDay[dd].push(bars[i]); }
+    var nByDay = {};
+    (opts.niftyBars || []).forEach(function (b) { var d0 = istDay(b.t); (nByDay[d0] || (nByDay[d0] = [])).push(b); });
+    var turnover = days.map(function (d) { var sum = 0; byDay[d].forEach(function (b) { sum += b.c * (b.v || 0); }); return sum / 1e7; });
+    var lastEntry = num(opts.lastEntryMinute) ? opts.lastEntryMinute : 870, expMin = num(opts.expiryMinute) ? opts.expiryMinute : 915;
+    var onePer = opts.onePerStock !== false, coolMs = (num(opts.cooldownMinutes) ? opts.cooldownMinutes : 60) * 60000;
+    var sizing = opts.sizing || { capital: 100000, riskPct: 1, maxPer: 10, fractional: true };
+    for (var di = 1; di < days.length; di++) {
+      var d = days[di], prev = byDay[days[di - 1]], today = byDay[d], state = opts.regimeByDay ? opts.regimeByDay[d] : null;
+      if (!state || state === 'UNKNOWN' || prev.length < 20) continue;
+      var tvs = turnover.slice(Math.max(0, di - 20), di), tv = 0;
+      tvs.forEach(function (v) { tv += v; });
+      tv = tvs.length ? tv / tvs.length : null;
+      var expiry = (d * 1440 - 330 + expMin) * 60000, nb = nByDay[d] || null, took = {}, seen = {};
+      for (var k = 0; k < today.length; k++) {
+        if (istMinute(today[k].t) + 5 > lastEntry) break;
+        var r = scanIntraday(symbol, prev.concat(today.slice(0, k + 1)), {
+          params: P, regime: { state: state }, strategies: opts.strategies, prevClose: prev[prev.length - 1].c, tradedValueCr: tv,
+          nowMs: today[k].t + 360000, lastEntryMinute: lastEntry, niftyBars: nb, followNifty: !!opts.followNifty, block: opts.block,
+        });
+        var found = r.signals.map(function (sg) { return { sig: sg, track: 'main' }; });
+        if (opts.shadows !== false) found = found.concat(r.shadow.map(function (sg) { return { sig: sg, track: 'shadow' }; }));
+        found.sort(function (a, b) { return b.sig.confidence - a.sig.confidence; });
+        for (var f = 0; f < found.length; f++) {
+          var sig = found[f].sig, track = found[f].track, st = strategy(sig.strategy), now = today[k].t;
+          if (onePer) {
+            if (took[track]) continue;
+            took[track] = true;
+          } else {
+            var full = track + sig.strategy + sig.direction, pair = track + sig.strategy;
+            if (seen[full] || (seen[pair] !== undefined && now - seen[pair] < coolMs)) continue;
+            seen[full] = now; seen[pair] = now;
+          }
+          var s = simulateTrade({ direction: sig.direction, entryLow: sig.entryLow, entryHigh: sig.entryHigh, stop: sig.stop, target: sig.target1 },
+            today.slice(k + 1), { expiryMs: expiry, nowMs: expiry + 1, barMs: 300000 });
+          var np = s.state === 'CLOSED' && num(s.fillT) ? niftyMove(nb, s.fillT, s.exitT) : null;
+          var t = btTrade(symbol, st, sig, track, state, now, s, sizing, opts.rates || {}, true, np);
+          if (t === 'open') out.open++; else if (t === 'notTriggered') out.notTriggered++; else out.trades.push(t);
+        }
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Summary of backtest trades (one strategy, or any group): the same metrics as the live record, plus results
+   * by regime and by year, a month-end equity curve (rupees, starting at capital), the most trades open at once,
+   * and the yearly growth rate. opts: {capital}
+   */
+  function btSummary(trades, opts) {
+    opts = opts || {};
+    var cap = opts.capital > 0 ? opts.capital : 100000;
+    var list = (trades || []).filter(function (x) { return num(x.netPct); }).slice().sort(function (a, b) { return a.exitT - b.exitT; });
+    var m = metrics(list, { capital: cap }), out = { metrics: m, regimes: {}, years: {}, curve: [], maxOpen: 0, from: null, to: null, cagrPct: null };
+    if (!list.length) return out;
+    var groups = function (keyOf) {
+      var g = {};
+      list.forEach(function (x) { var k = keyOf(x); (g[k] || (g[k] = [])).push(x); });
+      var res = {};
+      Object.keys(g).forEach(function (k) {
+        var mm = metrics(g[k], { capital: cap });
+        res[k] = { trades: mm.trades, winRatePct: mm.winRatePct, expectancyPct: mm.expectancyPct, profitFactor: mm.profitFactor, totalNetPnl: mm.totalNetPnl };
+      });
+      return res;
+    };
+    out.regimes = groups(function (x) { return x.regime || 'UNKNOWN'; });
+    out.years = groups(function (x) { return String(new Date(x.exitT + 330 * 60000).getUTCFullYear()); });
+    var money = m.totalNetPnl !== null, eq = cap, month = null, lastT = null, events = [];
+    out.from = list.reduce(function (a, x) { return Math.min(a, num(x.dayT) ? x.dayT : x.exitT); }, Infinity);
+    out.to = list[list.length - 1].exitT;
+    out.curve.push({ t: out.from, v: cap });
+    list.forEach(function (x) {
+      var dt = new Date(x.exitT + 330 * 60000), key = dt.getUTCFullYear() * 12 + dt.getUTCMonth();
+      if (month !== null && key !== month) out.curve.push({ t: lastT, v: round(eq, 2) }); // month end, before this trade
+      eq = money ? eq + x.netPnl : eq * (1 + x.netPct / 100);
+      month = key; lastT = x.exitT;
+      if (num(x.fillT)) { events.push([x.fillT, 1]); events.push([x.exitT, -1]); }
+    });
+    out.curve.push({ t: out.to, v: round(eq, 2) });
+    events.sort(function (a, b) { return a[0] - b[0] || a[1] - b[1]; });
+    var open = 0;
+    events.forEach(function (e) { open += e[1]; if (open > out.maxOpen) out.maxOpen = open; });
+    var years = (out.to - out.from) / (365.25 * 86400000);
+    if (years >= 0.5 && eq > 0) out.cagrPct = round((Math.pow(eq / cap, 1 / years) - 1) * 100, 2);
+    return out;
+  }
+
   return {
     VERSION: VERSION,
     OPEN_MIN: OPEN_MIN,
@@ -1112,7 +1402,15 @@ var SRCore = (function () {
     charges: charges,
     simulateTrade: simulateTrade,
     tradeResult: tradeResult,
+    paperResult: paperResult,
+    niftyMove: niftyMove,
+    cooldownDays: cooldownDays,
+    holdDaysFor: holdDaysFor,
     metrics: metrics,
     graduate: graduate,
+    btContext: btContext,
+    backtestDaily: backtestDaily,
+    backtestIntraday: backtestIntraday,
+    btSummary: btSummary,
   };
 })();

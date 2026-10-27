@@ -45,6 +45,19 @@ function add(el, kids) {
   }
 }
 
+/** Replace an element's children. Like h(), it skips null, false and '' (the DOM's own replaceChildren would print "null"). */
+export function fill(el, ...kids) {
+  el.replaceChildren();
+  add(el, kids);
+  return el;
+}
+
+/** Add children to an element, skipping null, false and '' like h(). */
+export function append(el, ...kids) {
+  add(el, kids);
+  return el;
+}
+
 /** Parse a small trusted SVG icon string (from icons.js only) into a node. */
 export function icon(markup) {
   const tpl = document.createElement('template');
@@ -91,6 +104,10 @@ export const fmt = {
   /** 25 Oct 2026 */
   shortDate(d) {
     return new Intl.DateTimeFormat('en-IN', { timeZone: 'Asia/Kolkata', day: 'numeric', month: 'short', year: 'numeric' }).format(toDate(d));
+  },
+  /** Oct 2026 */
+  monthYear(d) {
+    return new Intl.DateTimeFormat('en-IN', { timeZone: 'Asia/Kolkata', month: 'short', year: 'numeric' }).format(toDate(d));
   },
   /** 25 Oct */
   dayMonth(d) {
