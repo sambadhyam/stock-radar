@@ -1066,6 +1066,25 @@ test('menu: update paper results now', () => {
   ok(sim.state.alerts.some((x) => /after 15:30/.test(x.msg)), 'not during market hours');
 });
 
+test('menu: intraday alerts left unjudged after the close are judged by Update paper results now', () => {
+  const day = '2026-10-26';
+  const { G, sim, w } = marketWorld({ end: day, intra: { [TOKENS.TCS]: SC.intraday.orb() }, minute: { [TOKENS.TCS]: minuteDay(day, 101.1, '09:47', 0.02) } });
+  G.MarketCal._now = at('2026-10-25T21:00:00+05:30');
+  G.loadHistory();
+  G.Schedule.install();
+  for (const t of ['08:50', '09:41', '09:46']) tickAtDay(G, day, t);
+  eq(alertsRows(sim).length, 1, 'the breakout alert');
+  w.angelDown = true; // Angel One does not answer during the end-of-day run
+  for (const t of ['16:00', '16:01', '16:02', '16:03', '16:04', '16:05', '16:06']) tickAtDay(G, day, t);
+  eq(alertsRows(sim)[0].status, 'OPEN', 'not judged at the close');
+  w.angelDown = false;
+  sim.state.uiAvailable = true;
+  G.MarketCal._now = at(day + 'T22:00:00+05:30');
+  G.updatePaperResults();
+  const a = alertsRows(sim)[0];
+  eq(a.status, 'CLOSED'); eq(a.outcome, 'TARGET_HIT', 'judged on 1-minute prices from the menu');
+});
+
 // =================== Phase 4: the Web App API ===================
 
 const post = (G, body) => JSON.parse(G.doPost({ postData: { contents: JSON.stringify(body) } }).getContent());

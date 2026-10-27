@@ -114,7 +114,7 @@ export function alertRow(a, onOpen) {
         a.outcome
           ? h('span', { class: a.outcome.state === 'not' ? 'faint' : tone(a.outcome.pct) },
             a.outcome.state === 'not' || a.outcome.pct == null ? t(OUTCOME_KEY[a.outcome.state] || 'legend.flat') : `${t(OUTCOME_KEY[a.outcome.state])} ${fmt.pct(a.outcome.pct, 1)}`)
-          : h('span', { class: 'faint' }, whenShort(a.time)))));
+          : h('span', { class: 'faint' }, whenShort(a.time) + (a.state !== 'CLOSED' && a.validTill && a.validTill < Date.now() ? ' · ' + t('alert.pending') : '')))));
 }
 
 /** "12:11" for today, "26 Oct" for an earlier day. */

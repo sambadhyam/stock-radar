@@ -55,12 +55,16 @@ function periodRange(f) {
   }
 }
 
+/** Its time is over but the engine has not judged it yet (that happens after the close, on 1-minute prices). */
+export const isPending = (a) => a.state !== 'CLOSED' && !!a.validTill && a.validTill < Date.now();
+
 const RESULTS = {
   target: (a) => !!a.outcome && a.outcome.state === 'target',
   stop: (a) => !!a.outcome && a.outcome.state === 'stop',
   expired: (a) => !!a.outcome && a.outcome.state === 'expired',
   not: (a) => !!a.outcome && a.outcome.state === 'not',
-  open: (a) => a.state !== 'CLOSED',
+  open: (a) => a.state !== 'CLOSED' && !isPending(a),
+  pending: (a) => isPending(a),
   profit: (a) => resultPct(a) > 0,
   loss: (a) => resultPct(a) < 0,
 };
@@ -101,7 +105,7 @@ function summarize(list) {
   const nets = traded.map(netOf).filter((v) => v != null);
   const count = (st) => list.filter((a) => a.outcome && a.outcome.state === st).length;
   return {
-    n: list.length, open: list.filter((a) => a.state !== 'CLOSED').length, traded: traded.length, won, lost,
+    n: list.length, open: list.filter((a) => a.state !== 'CLOSED' && !isPending(a)).length, pending: list.filter(isPending).length, traded: traded.length, won, lost,
     target: count('target'), stop: count('stop'), expired: count('expired'), not: count('not'),
     winRate: traded.length ? Math.round((won / traded.length) * 100) : null,
     avg: traded.length ? traded.reduce((s, a) => s + resultPct(a), 0) / traded.length : null,
@@ -240,7 +244,9 @@ function summaryPanel(items) {
       q('stop', '🛑 ' + t('alerts.r.stop'), s.stop),
       q('expired', '⏳ ' + t('alerts.r.expired'), s.expired),
       q('not', '⛔ ' + t('alerts.r.not'), s.not),
-      q('open', '📂 ' + t('alerts.r.open'), s.open)),
+      q('open', '📂 ' + t('alerts.r.open'), s.open),
+      s.pending ? q('pending', '🕓 ' + t('alerts.r.pending'), s.pending) : null),
+    s.pending ? h('p', { class: 'note', style: { marginTop: '8px' } }, t('alerts.pendingNote', { n: s.pending })) : null,
     s.traded ? h('div', { class: 'stat-line' },
       h('span', null, t('results.win') + ' ', h('b', null, `${s.winRate}%`), ` (${s.won}/${s.traded})`),
       h('span', null, t('alerts.sumAvg') + ' ', h('b', { class: tone(s.avg) }, fmt.pct(s.avg))),
@@ -291,7 +297,7 @@ function openFilters(data) {
       section(t('alerts.period'), h('div', null,
         filterChips(['all', 'today', 'prev', '7d', '30d'].map((v) => ({ value: v, label: t('alerts.p.' + v) })), filters.period, (v) => { dayInput.value = ''; change({ period: v, day: '' }); }, t('alerts.period')),
         h('div', { class: 'date-row' }, h('span', { class: 'faint' }, t('alerts.p.day')), dayInput))),
-      section(t('alerts.result'), filterChips(['all', 'target', 'stop', 'expired', 'not', 'open', 'profit', 'loss'].map((v) => ({ value: v, label: v === 'all' ? t('common.all') : t('alerts.r.' + v) })), filters.result, (v) => change({ result: v }), t('alerts.result'))),
+      section(t('alerts.result'), filterChips(['all', 'target', 'stop', 'expired', 'not', 'open', 'pending', 'profit', 'loss'].map((v) => ({ value: v, label: v === 'all' ? t('common.all') : t('alerts.r.' + v) })), filters.result, (v) => change({ result: v }), t('alerts.result'))),
       section(t('alerts.direction'), filterChips(['all', 'buy', 'short', 'exit'].map((v) => ({ value: v, label: v === 'all' ? t('common.all') : t('dir.' + v) })), filters.dir, (v) => change({ dir: v }), t('alerts.direction'))),
       section(t('alerts.strategy'), stratSel),
       section(t('alerts.stratStatus'), filterChips(['all', 'live', 'paper', 'rejected'].map((v) => ({ value: v, label: v === 'all' ? t('common.all') : t('status.' + v) })), filters.status, (v) => change({ status: v }), t('alerts.stratStatus'))),

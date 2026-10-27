@@ -1,7 +1,7 @@
 // state.js — user settings, kept on this phone. When the engine is connected, its settings win and are saved there too.
 import { store } from './util.js';
 
-export const APP_VERSION = '0.6.5';
+export const APP_VERSION = '0.6.6';
 /** The oldest engine (SR_VERSION in Data.gs) whose settings and data this app fully understands. */
 export const ENGINE_NEEDED = '0.6.0';
 
