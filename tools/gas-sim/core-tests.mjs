@@ -165,6 +165,20 @@ export function coreTests({ test, eq, ok, root }) {
     eq(P2.minRROther, 1.2, 'override from Config'); eq(P2['orb.volMult'], 1.5, 'bad value falls back');
   });
 
+  test('core: the entry range always ends well before the stop-loss', () => {
+    // An opening-range short whose breakout bar closed far below the range: the raw range (close to range low)
+    // reached past the ATR stop, so a fill at its top would have been above the stop (seen on 27 Oct, AXISBANK).
+    const st = C.strategy('orb'), P = C.params();
+    const raw = { direction: 'SHORT', entry: 1213, entryLow: 1213, entryHigh: 1216, stop: 1215.95, targetR: [2, 3], score: 60, reasons: ['x'] };
+    const sig = C.finalize(raw, st, P, { regime: bull, tradedValueCr: 500 }).signal;
+    ok(sig.entryHigh < sig.stop, 'short: range ends below the stop: ' + sig.entryHigh + ' vs ' + sig.stop);
+    ok(sig.entryHigh - sig.entry <= (sig.stop - sig.entry) / 2 + 1e-9 && sig.entryLow === 1213, JSON.stringify(sig));
+    const buy = C.finalize({ direction: 'BUY', entry: 500, entryLow: 496, entryHigh: 500, stop: 497, targetR: [2, 3], score: 60, reasons: ['x'] }, st, P, { regime: bull, tradedValueCr: 500 }).signal;
+    ok(buy.entryLow > buy.stop && buy.entry - buy.entryLow <= (buy.entry - buy.stop) / 2 + 1e-9, 'buy: ' + JSON.stringify(buy));
+    const wide = C.finalize({ direction: 'BUY', entry: 100, entryLow: 99.5, entryHigh: 100.5, stop: 97, targetR: [2, 3], score: 60, reasons: ['x'] }, C.strategy('base-breakout'), P, { regime: bull, tradedValueCr: 50 }).signal;
+    eq(wide.entryLow, 99.5, 'a range already clear of the stop is kept');
+  });
+
   test('core: confidence leans on the paper record as it grows, up to half at 30 trades', () => {
     eq(C.confidence(70, null), 70);
     eq(C.confidence(70, { trades: 30, winRatePct: 60, profitFactor: 1.5 }), Math.round(70 * 0.5 + (60 * 0.6 + 40) * 0.5));

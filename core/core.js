@@ -16,7 +16,7 @@
 var SRCore = (function () {
   'use strict';
 
-  var VERSION = '0.6.0';
+  var VERSION = '0.6.1';
   var OPEN_MIN = 555;   // 09:15 IST in minutes after midnight
   var CLOSE_MIN = 930;  // 15:30 IST
   var ALL_REGIMES = ['BULL', 'NEUTRAL', 'BEAR', 'HIGH_VOL'];
@@ -803,6 +803,14 @@ var SRCore = (function () {
     if (isExit) { sig.confidence = sig.ruleScore; return regimeOk ? { signal: sig } : { rejected: regimeWhy }; }
     var buy = dir === 'BUY';
     sig.stop = tickRound(raw.stop, buy ? 'down' : 'up');
+    // The entry range must end well before the stop-loss: at most half the risk from the entry on the stop's
+    // side. Otherwise (a breakout bar that closed far past its level) a fill at the far edge would sit next to,
+    // or even beyond, the stop.
+    var risk0 = buy ? sig.entry - sig.stop : sig.stop - sig.entry;
+    if (risk0 > 0) {
+      if (buy) sig.entryLow = Math.min(sig.entry, Math.max(sig.entryLow, tickRound(sig.entry - 0.5 * risk0, 'up')));
+      else sig.entryHigh = Math.max(sig.entry, Math.min(sig.entryHigh, tickRound(sig.entry + 0.5 * risk0, 'down')));
+    }
     if (raw.targetR) {
       // Multiples of the rounded risk, rounded away from the entry so 2× really is at least 2×.
       var rk = buy ? sig.entry - sig.stop : sig.stop - sig.entry;
