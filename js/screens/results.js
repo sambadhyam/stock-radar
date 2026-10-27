@@ -8,6 +8,7 @@ import { equityChart } from '../charts.js';
 import { toast } from '../ui.js';
 import { getData, refresh } from '../data.js';
 import { api, isConnected } from '../api.js';
+import { reviewSection } from './review.js';
 
 const HZ_ORDER = ['intraday', 'swing', 'medium', 'long'];
 
@@ -111,7 +112,8 @@ function reportsTab(data) {
   const due = [30, 60, 90].map((n) => ({ n, date: data.reportDue(n), sent: sent.includes(n) }));
   const saved = data.reports || [];
   return h('div', null,
-    h('section', { class: 'sec', style: { marginTop: '8px' } },
+    reviewSection(data),
+    h('section', { class: 'sec' },
       h('h2', { class: 'sec-title' }, t('results.readiness')),
       h('p', { class: 'sec-note' }, t('results.readinessNote')),
       due[0].date == null ? h('p', { class: 'muted' }, t('results.readinessStart')) : null,

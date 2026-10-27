@@ -6,7 +6,7 @@
  * This file holds no keys. Keys are saved privately with  Stock Radar → 2. Set up keys.
  */
 
-var SR_VERSION = '0.6.2';
+var SR_VERSION = '0.6.3';
 var IST = 'Asia/Kolkata';
 
 /* =============================== Settings =============================== */
@@ -57,6 +57,7 @@ var CONFIG_DEFAULTS = [
   ['backtestMinutesPerDay', 30, 'Most trigger minutes the backtest uses on a trading day (twice this on other days), so the engine stays within Google\'s 90 minutes a day'],
   ['portfolioMaxStockPct', 20, 'Warn when one holding is more than this percent of your portfolio'],
   ['portfolioMaxSectorPct', 35, 'Warn when one sector is more than this percent of your portfolio'],
+  ['sessionReview', true, 'After the closing summary, send the session review: the day\'s paper results by strategy, buys and shorts, time of day and filters (with an AI review when AI summaries are on)'],
   ['aiSummaries', false, 'Show AI news summaries (Gemini) in the app; needs a Gemini API key in 2. Set up keys'],
   ['aiModel', 'gemini-3.5-flash-lite', 'Gemini model used for AI summaries'],
   ['muhuratTrading', false, 'Run the engine in special weekend Muhurat sessions'],

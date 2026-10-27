@@ -210,6 +210,7 @@ var Engine = {
       { key: 'scan', job: 'endOfDayScan', run: function () { var r = Scans.endOfDay(today, day); day.eodScan = { scanned: r.scanned || 0, signals: r.signals || 0 }; return 'done'; } },
       { key: 'hold', job: 'holdings', run: function () { day.holdings = Portfolio.value(); Portfolio.taxNotes(); return 'done'; } },
       { key: 'sum', job: 'endOfDay', run: function () { self.endOfDay(today, day); return 'done'; } },
+      { key: 'rev', job: 'sessionReview', run: function () { SessionReview.run(today); return 'done'; } },
     ];
     day.eodStep = day.eodStep || 0;
     while (day.eodStep < steps.length && Date.now() < deadline - 20000) {

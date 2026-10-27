@@ -1005,6 +1005,36 @@ var AiSummary = {
     return base;
   },
 
+  /**
+   * The AI part of the session review: the day's numbers (SessionReview.factLines) put into words.
+   * Returns null when AI summaries are off or there is no key. Asks for JSON so the parts can be shown separately.
+   */
+  session: function (f) {
+    if (Config.get('aiSummaries') !== true || !Secrets.has('GEMINI_API_KEY')) return null;
+    var key = Secrets.get('GEMINI_API_KEY');
+    var prompt = 'You review one day of PAPER trading (virtual money) done automatically by a rule-based alert engine for Indian stocks, for its owner, a retail trader. ' +
+      'Use ONLY the facts below. Do not invent, round differently or recalculate any number; quote numbers exactly as written. ' +
+      'Never recommend buying or selling any stock and never predict prices. Talk about the strategies, buys versus shorts, time of day and the market filters. ' +
+      'Plain English, short sentences, no markdown. Reply with JSON only, in this shape: ' +
+      '{"overview": "two sentences on how the day went", "worked": ["up to 3 short points"], "didnt": ["up to 3 short points"], "watch": ["up to 2 points to check in the next session"]}\n\nFacts:\n' +
+      SessionReview.factLines(f).join('\n');
+    var res = Http.request(this.URL + this.model() + ':generateContent', {
+      method: 'post', contentType: 'application/json', headers: { 'x-goog-api-key': key },
+      payload: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: prompt }] }], generationConfig: { temperature: 0.2, maxOutputTokens: 2048, responseMimeType: 'application/json' } }),
+    }, { retries: 1 });
+    if (res.code !== 200 || !res.json) throw new Error('Gemini: ' + Secrets.mask(this.why(res)));
+    var text = '', cand = res.json.candidates && res.json.candidates[0];
+    ((cand && cand.content && cand.content.parts) || []).forEach(function (p) { if (p.text && !p.thought) text += p.text; });
+    var j = null;
+    try { j = JSON.parse(String(text).replace(/^\s*```(?:json)?/i, '').replace(/```\s*$/, '')); } catch (e) { j = null; }
+    var clean = function (x) { return String(x || '').replace(/\*\*/g, '').replace(/\s+/g, ' ').trim(); };
+    var list = function (a, n) { return (Array.isArray(a) ? a : []).map(clean).filter(function (x) { return x.length > 3; }).slice(0, n).map(function (x) { return x.slice(0, 280); }); };
+    if (!j || typeof j !== 'object') j = { overview: clean(text) };
+    var out = { overview: clean(j.overview).slice(0, 600), worked: list(j.worked, 3), didnt: list(j.didnt || j.didNot || j.notWorked, 3), watch: list(j.watch, 2), model: this.model(), at: Date.now() };
+    if (!out.overview && !out.worked.length && !out.didnt.length) throw new Error('Gemini sent an empty answer' + (cand && cand.finishReason ? ' (' + cand.finishReason + ')' : ''));
+    return out;
+  },
+
   why: function (res) {
     var msg = res.json && res.json.error && res.json.error.message ? res.json.error.message : String(res.text || '').slice(0, 160);
     if (res.code === 400 && /api key/i.test(msg)) return 'the API key was refused. Check it in Stock Radar → 2. Set up keys.';

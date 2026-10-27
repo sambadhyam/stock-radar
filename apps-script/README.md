@@ -269,12 +269,13 @@ Every `.gs` file changed and there is one new file. `appsscript.json` is unchang
 
 That's all. The schedule keeps running, and the backtest starts by itself after the next close.
 
-## Update 0.6.2: clearer Telegram messages, cleaner news, settings that are never lost
+## Update 0.6.3: session review, older alerts in the app, clearer Telegram messages
 
+- **📒 Session review** after the closing summary: the day's paper result in rupees and % of the paper capital, after charges; trades won and lost, targets and stops; best and worst trade; each strategy; buys against shorts; time of day; what the market filters held back; new swing signals with their levels. With AI summaries on, Gemini adds a short write-up of those numbers (labelled "not advice"; it is given only the numbers). Switch: app → Settings → Alerts → Session review after the close (`sessionReview`). Also in the app: Results → Reports.
+- The app's Alerts screen can now load every older alert for its date filters.
 - Telegram messages are laid out in sections with emojis: 🟢 BUY / 🔴 SHORT / ⚠️ EXIT, then 💰 entry, 🛑 stop-loss and 🎯 targets (each with its % from the entry), ⚖️ reward:risk, 📦 size, ⏰ validity and 📝 the reasons. The closing summary repeats the entry, stop and target of every swing and medium signal.
 - News leaves out price and quote pages and anything older than four months, searches the last 30 days first, and lists the newest first. AI summaries use the same headlines.
-- Settings saved in the app while the engine is busy (for example during the end-of-day run) wait and are written within a few minutes; the app already shows them.
-- A backtest step that finds the engine busy tries again instead of counting as a failure.
+- Settings saved in the app while the engine is busy wait and are written within a few minutes; the app already shows them. A backtest step that finds the engine busy tries again instead of counting as a failure.
 
 1. Paste six files (open each link, **Ctrl+A**, **Ctrl+C**; in Apps Script click in the matching file, **Ctrl+A**, **Ctrl+V**), then **Ctrl+S**:
    [Signals.gs](https://raw.githubusercontent.com/sambadhyam/stock-radar/main/apps-script/Signals.gs) → `Signals`,
@@ -284,7 +285,8 @@ That's all. The schedule keeps running, and the backtest starts by itself after 
    [Lab.gs](https://raw.githubusercontent.com/sambadhyam/stock-radar/main/apps-script/Lab.gs) → `Lab`,
    [Data.gs](https://raw.githubusercontent.com/sambadhyam/stock-radar/main/apps-script/Data.gs) → `Data`.
 2. Publish the web app again: **Deploy → Manage deployments → ✏️ → Version: New version → Deploy**.
-3. In the app, Settings shows "Connected to the engine (version 0.6.2)" at the bottom once the new version is live.
+3. In the app, Settings shows "Connected to the engine (version 0.6.3)" at the bottom once the new version is live.
+4. To see today's review straight away: app → Results → Reports → **Make the latest review now**.
 
 ## Backtests
 

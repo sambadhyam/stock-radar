@@ -330,7 +330,7 @@ main:focus { outline: none; }
 .input-wrap .affix.post { right: 14px; }
 .input-wrap input.has-pre { padding-left: 30px; }
 .input-wrap input.has-post { padding-right: 34px; }
-input[type="text"], input[type="number"], input[type="url"], input[type="password"], select {
+input[type="text"], input[type="number"], input[type="url"], input[type="password"], input[type="search"], input[type="date"], select {
   width: 100%; height: 48px; padding: 0 14px;
   border-radius: var(--r-control); border: 1px solid var(--line);
   background: var(--surface); color: var(--text);
@@ -487,3 +487,23 @@ details[open] > summary::after { transform: rotate(-135deg); margin-top: 4px; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
+
+/* ---------- Alerts: search, filters, totals, day headings ---------- */
+.search-row { display: grid; grid-template-columns: 1fr auto; gap: 8px; margin-bottom: 10px; }
+.filter-btn { min-height: 48px; gap: 6px; padding: 0 14px; }
+.filter-btn svg { width: 20px; height: 20px; }
+.badge-count { min-width: 20px; height: 20px; padding: 0 6px; border-radius: 999px; background: var(--brand); color: var(--on-brand); font-size: var(--fs-xs); font-weight: 700; display: inline-grid; place-items: center; }
+.active-filters { margin: 2px 0 10px; align-items: center; }
+.alert-sum { margin-bottom: 6px; padding: 12px 14px; }
+.qchips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.qchip { height: 34px; padding: 0 10px; border-radius: 999px; border: 1px solid var(--line); background: transparent; color: var(--text-2); font-size: var(--fs-s); font-weight: 600; }
+.qchip b { color: var(--text); }
+.qchip[aria-pressed="true"] { background: var(--text); border-color: var(--text); color: var(--bg); }
+.qchip[aria-pressed="true"] b { color: var(--bg); }
+.qchip:disabled { opacity: .45; }
+.day-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; padding: 18px 0 6px; border-bottom: 1px solid var(--line); font-size: var(--fs-s); color: var(--text-2); }
+.day-head .day-name { font-weight: 700; color: var(--text); }
+.date-row { display: flex; align-items: center; gap: 10px; margin-top: 4px; }
+.date-row input { flex: 1; width: auto; min-width: 0; }
+.plain-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+

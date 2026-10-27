@@ -121,6 +121,9 @@ var AppApi = {
     if (action === 'holdings') return this.holdings(req);
     if (action === 'fundamentals') return this.lock(function () { return FundImport.save(req.rows, String(req.source || 'App import')); });
     if (action === 'summary') return AiSummary.summarise(String(req.symbol || ''));
+    if (action === 'alerts') return this.alertHistory(Number(req.before) || 0, Number(req.limit) || 300);
+    if (action === 'reviews') return { latest: SessionReview.latest(), list: SessionReview.list() };
+    if (action === 'reviewNow') return this.lock(function () { return SessionReview.run(MarketCal.lastCompletedSession(), { force: true, telegram: req.telegram === true }); });
     if (action === 'testTelegram') {
       Notify.telegram('✅ Test message from the Stock Radar app. Alerts arrive in this chat.');
       return { sent: true };
@@ -161,31 +164,7 @@ var AppApi = {
     var statusOf = {};
     strategies.forEach(function (st) { statusOf[st.id] = st.status; });
 
-    var alerts = main.slice(-this.MAX_ALERTS).map(function (r) {
-      var dir = self.lower(r.direction), why = String(r.reasons || '').split(' | ').filter(Boolean);
-      var a = {
-        id: String(r.id), symbol: String(r.symbol), horizon: self.lower(r.horizon), strategy: String(r.strategy), dir: dir,
-        strategyName: SRCore.strategy(r.strategy) ? SRCore.strategy(r.strategy).name : String(r.strategy),
-        time: self.ms(r.createdAt), validTill: self.ms(r.validTill), confidence: self.num(r.confidence), why: why,
-        status: statusOf[r.strategy] || 'paper', regime: self.regimeKey(r.regime), source: String(r.source || ''),
-        state: String(r.status || 'OPEN'),
-      };
-      if (dir === 'exit') {
-        a.lastPrice = self.num(r.entryHigh) || self.num(r.entryLow);
-        a.headline = why[0] || 'Exit check';
-        a.dma200 = null;
-      } else {
-        a.entryLo = self.num(r.entryLow); a.entryHi = self.num(r.entryHigh); a.stop = self.num(r.stop);
-        a.targets = [self.num(r.target1), self.num(r.target2)].filter(function (v) { return v !== null; });
-        a.rr = self.num(r.rr);
-      }
-      if (r.status === 'CLOSED' && r.outcome) {
-        var key = { TARGET_HIT: 'target', STOP_HIT: 'stop', EXPIRED: 'expired', NOT_TRIGGERED: 'not', EXIT_RIGHT: 'target', EXIT_EARLY: 'stop' }[r.outcome] || 'not';
-        a.outcome = { state: key, pct: self.num(r.netPct) !== null ? r.netPct : self.num(r.outcomePct) };
-      }
-      if (self.num(r.fillPrice)) a.paper = { fill: r.fillPrice, exit: self.num(r.exitPrice), qty: self.num(r.paperQty), net: self.num(r.netPnl) };
-      return a;
-    });
+    var alerts = main.slice(-this.MAX_ALERTS).map(function (r) { return self.alertOut(r, statusOf); });
 
     return {
       isDemo: false, version: SR_VERSION, updatedAt: Date.now(), session: session, asOf: asOf,
@@ -193,13 +172,51 @@ var AppApi = {
       paper: this.paper(rows, trades, cap, today), scan: this.scan(), fundamentals: this.fundamentals(),
       reports: this.reports(), paperStart: Secrets.props().getProperty('PAPER_START') || '',
       readinessSent: (Secrets.props().getProperty('READINESS_SENT') || '').split(',').filter(Boolean).map(Number),
-      settings: PendingSettings.overlay(this.settings(book)), rules: rules,
+      settings: PendingSettings.overlay(this.settings(book)), rules: rules, review: SessionReview.latest(), alertsTotal: main.length,
       backtest: Backtest.info(), portfolio: Portfolio.view(), ai: AiSummary.status(), params: Scans.params(),
       labSettings: {
         rates: Review.rates(), sizing: Review.sizing(), lastEntryMinute: Config.minutesOf('noEntriesAfter'), expiryMinute: Config.minutesOf('intradayExpiry'),
         cooldownMinutes: Number(Config.get('alertCooldownMinutes')) || 60,
       },
     };
+  },
+
+  /** One Alerts row in the shape the app uses. */
+  alertOut: function (r, statusOf) {
+    var self = this, dir = self.lower(r.direction), why = String(r.reasons || '').split(' | ').filter(Boolean);
+    var a = {
+      id: String(r.id), symbol: String(r.symbol), horizon: self.lower(r.horizon), strategy: String(r.strategy), dir: dir,
+      strategyName: SRCore.strategy(r.strategy) ? SRCore.strategy(r.strategy).name : String(r.strategy),
+      time: self.ms(r.createdAt), validTill: self.ms(r.validTill), confidence: self.num(r.confidence), why: why,
+      status: statusOf[r.strategy] || 'paper', regime: self.regimeKey(r.regime), source: String(r.source || ''),
+      state: String(r.status || 'OPEN'),
+    };
+    if (dir === 'exit') {
+      a.lastPrice = self.num(r.entryHigh) || self.num(r.entryLow);
+      a.headline = why[0] || 'Exit check';
+      a.dma200 = null;
+    } else {
+      a.entryLo = self.num(r.entryLow); a.entryHi = self.num(r.entryHigh); a.stop = self.num(r.stop);
+      a.targets = [self.num(r.target1), self.num(r.target2)].filter(function (v) { return v !== null; });
+      a.rr = self.num(r.rr);
+    }
+    if (r.status === 'CLOSED' && r.outcome) {
+      var key = { TARGET_HIT: 'target', STOP_HIT: 'stop', EXPIRED: 'expired', NOT_TRIGGERED: 'not', EXIT_RIGHT: 'target', EXIT_EARLY: 'stop' }[r.outcome] || 'not';
+      a.outcome = { state: key, pct: self.num(r.netPct) !== null ? r.netPct : self.num(r.outcomePct) };
+      a.closedAt = self.ms(r.closedAt);
+    }
+    if (self.num(r.fillPrice)) a.paper = { fill: r.fillPrice, exit: self.num(r.exitPrice), qty: self.num(r.paperQty), net: self.num(r.netPnl) };
+    return a;
+  },
+
+  /** Older alerts for the app's date filters, newest first: up to limit (≤ 500) created before 'before' (ms). */
+  alertHistory: function (before, limit) {
+    var self = this, book = StrategyBook.load(), statusOf = {};
+    Object.keys(book).forEach(function (id) { statusOf[id] = self.statusKey(book[id].status); });
+    var rows = Tables.read('Alerts').rows.filter(function (r) { var t = self.ms(r.createdAt); return (r.track || 'main') !== 'shadow' && t && (!before || t < before); });
+    rows.sort(function (a, b) { return self.ms(b.createdAt) - self.ms(a.createdAt); });
+    var n = Math.max(1, Math.min(500, limit || 300)), page = rows.slice(0, n);
+    return { alerts: page.map(function (r) { return self.alertOut(r, statusOf); }), more: rows.length > n, oldest: page.length ? self.ms(page[page.length - 1].createdAt) : null };
   },
 
   /** A strategy's backtest numbers in the shape the app's comparison table uses. */
@@ -313,7 +330,7 @@ var AppApi = {
   },
 
   /** On/off settings the app may change (all TRUE/FALSE in the Config sheet). */
-  SWITCHES: ['telegram', 'emailDigest', 'paperAlerts', 'intradayFollowNifty', 'intradayBlockBuysInBear', 'intradayBlockShortsInBull', 'intradayOneAlertPerStock', 'aiSummaries'],
+  SWITCHES: ['telegram', 'emailDigest', 'paperAlerts', 'intradayFollowNifty', 'intradayBlockBuysInBear', 'intradayBlockShortsInBull', 'intradayOneAlertPerStock', 'aiSummaries', 'sessionReview'],
   /** Numbers the app may change, with their allowed range. */
   NUMBERS: { realCapital: [1000, 1e10], paperCapital: [1000, 1e10], riskPct: [0.1, 5], maxPerStockPct: [1, 100], portfolioMaxStockPct: [5, 100], portfolioMaxSectorPct: [10, 100], backtestYears: [3, 15], intradayHistoryDays: [20, 120], backtestMinutesPerDay: [10, 40] },
   WHOLE: ['backtestYears', 'intradayHistoryDays', 'backtestMinutesPerDay'],

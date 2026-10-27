@@ -159,6 +159,7 @@ function world(sim, opts = {}) {
       if (w.geminiDown) return { code: 429, body: { error: { code: 429, message: 'Resource has been exhausted (e.g. check quota).' } } };
       if (h['x-goog-api-key'] !== GEMINI_KEY) return { code: 400, body: { error: { code: 400, message: 'API key not valid. Please pass a valid API key.' } } };
       w.geminiPrompt = body.contents[0].parts[0].text;
+      if (body.generationConfig && body.generationConfig.responseMimeType === 'application/json' && w.geminiReply) return { code: 200, body: { candidates: [{ content: { parts: [{ text: w.geminiReply }] }, finishReason: 'STOP' }] } };
       return { code: 200, body: { candidates: [{ content: { parts: [{ text: '- Profit rose 12% in the quarter.\n- **Won** a large order.\n- Shares rose after the results.\n- A fourth line that is dropped.' }] }, finishReason: 'STOP' }] } };
     }
     if (url.startsWith('https://news.google.com/rss/search')) {
@@ -812,6 +813,16 @@ test('evaluation: an intraday alert is judged on 1-minute candles after the clos
   eq(m.trades, 1); ok(/Insufficient data/.test(m.note), m.note);
   const summary = w.telegram.slice(sent0).join('\n');
   ok(/Paper trading/.test(summary) && /Closed today: 1/.test(summary) && /TCS target hit/.test(summary) && /Since start/.test(summary), summary);
+  // The session review follows the closing summary, with the day's numbers worked out exactly.
+  const review = w.telegram.slice(sent0).find((x) => /📒 <b>Session review/.test(x));
+  ok(review, 'session review sent: ' + w.telegram.slice(sent0).map((x) => x.slice(0, 40)).join(' / '));
+  const net = Math.round(a.netPnl);
+  ok(review.includes('Paper result today: <b>+₹' + net.toLocaleString('en-IN') + '</b>') && /1 trade closed · ✅ 1 won · ❌ 0 lost · win rate 100%/.test(review) && /🎯 Targets 1 · 🛑 Stops 0/.test(review), review);
+  ok(/🏆 Best: TCS \+/.test(review) && /<b>By strategy<\/b>\n🟢 Opening-range breakout: 1 trade, 1 won/.test(review) && /🟢 Buys: 1 trade, 1 won/.test(review) && !/AI review/.test(review), review);
+  const f = JSON.parse(sim.state.props.get('SESSION_REVIEW'));
+  eq(f.day, '2026-10-26'); eq(f.paper.n, 1); eq(f.paper.won, 1); eq(f.paper.net, net); eq(f.paper.target, 1); eq(f.byStrategy[0].id, 'orb'); eq(f.ai, null);
+  ok(sim.state.drive.items.some((x) => x.name === 'sessions.json'), 'kept in Drive for the app');
+  ok(sheetRows(sim, 'Reports').some((r) => r.type === 'session'), 'listed in Reports');
   sim.state.uiAvailable = true;
   G.showStatus();
   ok(/1 closed, net ₹/.test(sim.state.dialogs[sim.state.dialogs.length - 1].html), 'status shows the paper account');
@@ -1241,6 +1252,54 @@ test('web app: news leaves out price pages and old items, and looks further back
   ok(/when:30d$/.test(queries[0]) && !/when:/.test(queries[1]), queries.join(' / '));
   ok(!G.AppApi.quotePage('Reliance share price jumps 4% after Q2 results beat estimates - Mint'), 'a news headline with "share price" stays');
   ok(G.AppApi.quotePage('RELIANCE Stock Price and Chart — NSE:RELIANCE — TradingView'), 'chart pages go');
+});
+
+test('session review: the AI part puts the day\'s numbers into words, and the review can be made again from the app', () => {
+  const day = '2026-10-26';
+  const { G, sim, w } = marketWorld({ end: day, intra: { [TOKENS.TCS]: SC.intraday.orb() }, minute: { [TOKENS.TCS]: minuteDay(day, 101.1, '09:47', 0.02) } });
+  const token = sim.state.props.get('APP_TOKEN');
+  G.MarketCal._now = at('2026-10-25T21:00:00+05:30');
+  G.loadHistory();
+  G.Schedule.install();
+  setConfig(sim, G, 'aiSummaries', 'TRUE');
+  G.saveSecretsFromDialog({ GEMINI_API_KEY: GEMINI_KEY });
+  w.geminiReply = JSON.stringify({ overview: 'A small **winning** day: one breakout reached its target.', worked: ['Opening-range breakout made ₹50 on TCS.'], didnt: [], watch: ['Check whether breakouts keep working when Nifty is flat.'] });
+  for (const tm of ['08:50', '09:41', '09:46', '16:00']) tickAtDay(G, day, tm);
+  const review = w.telegram.find((x) => /📒 <b>Session review/.test(x));
+  ok(review && /🤖 <b>AI review<\/b>/.test(review) && /A small winning day/.test(review) && /✔️ Opening-range breakout made/.test(review) && /👀 Check whether/.test(review), review);
+  ok(/Use ONLY the facts below/.test(w.geminiPrompt) && /Paper trades closed today: 1\. Won 1/.test(w.geminiPrompt) && /Never recommend buying or selling/.test(w.geminiPrompt), w.geminiPrompt);
+  ok(!w.geminiPrompt.includes(KEYS.ANGEL_CLIENT_ID) && !w.geminiPrompt.includes(GEMINI_KEY), 'nothing private in the prompt');
+  const f = JSON.parse(sim.state.props.get('SESSION_REVIEW'));
+  eq(post(G, { a: 'bundle', t: token }).data.review.day, day, 'the app gets the latest review');
+  eq(post(G, { a: 'reviews', t: token }).data.list[0].day, day);
+  eq(f.ai.worked.length, 1); eq(f.ai.didnt.length, 0); ok(!/\*\*/.test(f.ai.overview), 'markdown removed');
+  // From the app: make it again (no Telegram unless asked); a Gemini failure keeps the numbers.
+  w.geminiDown = true;
+  const before = w.telegram.length;
+  G.MarketCal._now = at('2026-10-26T19:00:00+05:30');
+  const again = post(G, { a: 'reviewNow', t: token });
+  eq(again.ok, true, again.error);
+  eq(again.data.paper.n, 1); eq(again.data.ai, null); ok(/free quota/.test(again.data.aiError), again.data.aiError);
+  eq(w.telegram.length, before, 'no message from the app button unless asked');
+  // Off in the app: no review message after the close.
+  eq(post(G, { a: 'settings', t: token, settings: { sessionReview: false } }).ok, true);
+  G.Config._cache = null;
+  eq(G.Config.get('sessionReview'), false);
+});
+
+test('web app: older alerts come in pages for the date filters, newest first', () => {
+  const { G, sim } = marketWorld();
+  const token = sim.state.props.get('APP_TOKEN');
+  G.AlertBook.ensureHeaders();
+  const base = at('2026-09-01T10:00:00+05:30');
+  G.Store.append('Alerts', Array.from({ length: 25 }, (_, i) => ({ id: 'H' + i, createdAt: new Date(base + i * 86400000), symbol: 'TCS', horizon: 'SWING', strategy: 'macd', direction: 'BUY',
+    entryLow: 100, entryHigh: 101, stop: 95, target1: 110, rr: 2, confidence: 70, reasons: 'a | b', status: i % 2 ? 'CLOSED' : 'OPEN', outcome: i % 2 ? 'STOP_HIT' : '', netPct: i % 2 ? -1.5 : '', track: i === 3 ? 'shadow' : 'main' })));
+  const p1 = post(G, { a: 'alerts', t: token, limit: 10 }).data;
+  eq(p1.alerts.length, 10, JSON.stringify(p1).slice(0, 300)); eq(p1.more, true); eq(p1.alerts[0].id, 'H24', 'newest first');
+  ok(p1.alerts.every((x, i) => i === 0 || x.time <= p1.alerts[i - 1].time), 'sorted');
+  const p3 = post(G, { a: 'alerts', t: token, before: post(G, { a: 'alerts', t: token, before: p1.oldest, limit: 10 }).data.oldest, limit: 10 }).data;
+  eq(p3.more, false); eq(p3.alerts.length, 4, '24 main alerts in all (the shadow one is left out)');
+  eq(p3.alerts.find((x) => x.id === 'H1').outcome.state, 'stop', 'results come with them');
 });
 
 test('connect: the link carries the web app address and token; bad addresses are refused', () => {

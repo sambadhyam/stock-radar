@@ -62,4 +62,7 @@ export const api = {
   holdings: (payload) => call('holdings', payload),
   fundamentals: (rows, source) => call('fundamentals', { rows, source }),
   summary: (symbol) => call('summary', { symbol }),
+  alertHistory: (before, limit) => call('alerts', { before, limit }),
+  reviews: () => call('reviews'),
+  reviewNow: (telegram) => call('reviewNow', { telegram: !!telegram }),
 };

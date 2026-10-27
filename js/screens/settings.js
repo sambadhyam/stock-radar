@@ -16,6 +16,7 @@ const LABELS = {
   intradayFollowNifty: 'settings.followNifty', intradayBlockBuysInBear: 'settings.blockBuysBear', intradayBlockShortsInBull: 'settings.blockShortsBull',
   intradayOneAlertPerStock: 'settings.onePerStock', portfolioMaxStockPct: 'settings.pfStock', portfolioMaxSectorPct: 'settings.pfSector',
   backtestYears: 'settings.btYears', intradayHistoryDays: 'settings.btDays', backtestMinutesPerDay: 'settings.btMins', aiSummaries: 'settings.ai',
+  sessionReview: 'settings.sessionReview',
 };
 
 /** The engine job that was busy when settings were saved, in words. */
@@ -101,6 +102,7 @@ export function render({ data, rerender }) {
   const tg = switchRow('f-tg', t('settings.telegram'), t('settings.telegramSub'), s.telegram);
   const em = switchRow('f-em', t('settings.email'), t('settings.emailSub'), s.emailDigest);
   const pa = switchRow('f-pa', t('settings.paperAlerts'), t('settings.paperAlertsSub'), s.paperAlerts);
+  const rv = switchRow('f-rv', t('settings.sessionReview'), t('settings.sessionReviewSub'), s.sessionReview !== false);
 
   // Intraday rules (engine Config keys of the same names).
   const INTRA = [
@@ -163,6 +165,7 @@ export function render({ data, rerender }) {
       realCapital: Number(real.input.value), paperCapital: Number(paper.input.value),
       riskPct: Number(risk.input.value), maxPerStockPct: Number(maxStock.input.value),
       watchlist: watch, telegram: tg.input.checked, emailDigest: em.input.checked, paperAlerts: pa.input.checked,
+      sessionReview: rv.input.checked,
     };
     INTRA.forEach((r) => { patch[r.key] = r.input.checked; });
     patch.portfolioMaxStockPct = Number(pfStock.input.value); patch.portfolioMaxSectorPct = Number(pfSector.input.value);
@@ -196,7 +199,7 @@ export function render({ data, rerender }) {
       tags,
       h('div', { class: 'add-row' }, addInput, h('button', { type: 'button', class: 'btn btn-ghost', onclick: addSymbol }, icon(ICONS.plus), t('settings.add')))),
     h('section', { class: 'form-sec' },
-      h('h2', null, t('settings.alerts')), tg.el, em.el, pa.el,
+      h('h2', null, t('settings.alerts')), tg.el, em.el, pa.el, rv.el,
       tgBtn,
       connected ? null : h('p', { class: 'note faint', style: { textAlign: 'center', marginTop: '6px', fontSize: '12px' } }, t('settings.needConnect'))),
     h('section', { class: 'form-sec' },

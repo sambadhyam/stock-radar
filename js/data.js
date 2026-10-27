@@ -34,6 +34,8 @@ function adapt(b) {
     ai: b.ai || { enabled: false, key: false },
     params: b.params || {},
     labSettings: b.labSettings || null,
+    review: b.review || null,
+    alertsTotal: b.alertsTotal || (b.alerts ? b.alerts.length : 0),
   };
 }
 

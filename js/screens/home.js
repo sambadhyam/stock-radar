@@ -44,7 +44,9 @@ export function render({ data }) {
         h('span', null, h('b', { class: tone(total) }, fmt.pct(total)), ' ', t('home.sinceStart')),
         h('span', null, h('b', { class: tone(p.today) }, fmt.signedMoney(p.today)), ' ', dayWord),
         h('span', null, t('home.openTrades', { n: p.open.length }))),
-      equityChart({ points: p.curve, base: p.start, height: 64, mini: true, label: t('results.equity') })));
+      equityChart({ points: p.curve, base: p.start, height: 64, mini: true, label: t('results.equity') }),
+      data.review ? h('a', { class: 'sec-link', href: '#/results?tab=reports', style: { display: 'inline-block', marginTop: '8px' } },
+        t('home.review', { day: fmt.dayMonth(Date.parse(data.review.day + 'T12:00:00+05:30')), net: data.review.paper && data.review.paper.n ? fmt.signedMoney(data.review.paper.net) : '—' })) : null));
 
   // Live-ready strategies first, then the paper strategies closest to 30 trades. Rejected ones live on Results.
   const top = data.strategies.filter((st) => st.status !== 'rejected')

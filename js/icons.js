@@ -22,5 +22,6 @@ export const ICONS = {
   about: `<svg ${a}><circle cx="12" cy="12" r="8.5"/><path d="M12 11v5"/><circle cx="12" cy="8" r=".6" fill="currentColor"/></svg>`,
   plus: `<svg ${a}><path d="M12 5v14M5 12h14"/></svg>`,
   fund: `<svg ${a}><path d="M6.5 3.5h8l3 3v14h-11z"/><path d="M14.5 3.5v3h3"/><path d="M9.5 17v-3M12 17v-5M14.5 17v-2"/></svg>`,
+  filter: `<svg ${a}><path d="M4 6.5h16M7 12h10M10 17.5h4"/></svg>`,
   shield: `<svg ${a}><path d="M12 3.5 19 6v5.5c0 4.3-3 7.5-7 9-4-1.5-7-4.7-7-9V6z"/></svg>`,
 };

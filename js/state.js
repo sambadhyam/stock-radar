@@ -1,7 +1,7 @@
 // state.js — user settings, kept on this phone. When the engine is connected, its settings win and are saved there too.
 import { store } from './util.js';
 
-export const APP_VERSION = '0.6.4';
+export const APP_VERSION = '0.6.5';
 /** The oldest engine (SR_VERSION in Data.gs) whose settings and data this app fully understands. */
 export const ENGINE_NEEDED = '0.6.0';
 
@@ -35,6 +35,7 @@ export const DEFAULTS = Object.freeze({
   intradayHistoryDays: 60,  // sessions of 5-minute history kept for intraday backtests
   backtestMinutesPerDay: 30,// most trigger minutes the backtest uses in 24 hours (Google allows 90 in all)
   aiSummaries: false,       // AI news summaries (Gemini key needed in the sheet)
+  sessionReview: true,      // the session review on Telegram after the closing summary
   strategiesOff: [],        // strategy ids switched off
   backendUrl: '',
   token: '',
