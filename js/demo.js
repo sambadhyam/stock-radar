@@ -367,7 +367,7 @@ const LAB = {
 const REVIEW = {
   v: 1, day: S, at: at(S, '16:20'), capital: 100000, regime: 'BULL', nifty: { last: 25410.2, pct: 0.62 },
   alerts: { n: 9, intraday: 7, swing: 1, medium: 1, long: 0, buy: 6, short: 3, exit: 0, blocked: 4, pending: 0, perStock: 10000,
-    fate: { traded: 7, notTriggered: 1, tooPricey: 0, noData: 0, open: 1, other: 0 }, heldFate: { traded: 4, notTriggered: 0, tooPricey: 0, noData: 0, open: 0, other: 0 } },
+    fate: { traded: 7, notTriggered: 1, tooPricey: 0, noData: 0, pending: 0, open: 1, other: 0 }, heldFate: { traded: 4, notTriggered: 0, tooPricey: 0, noData: 0, pending: 0, open: 0, other: 0 } },
   paper: { n: 7, won: 4, lost: 3, flat: 0, winRatePct: 57, net: 412, gross: 506, charges: 94, returnPct: 0.41, avgPct: 0.18, target: 4, stop: 3, expired: 0, notTriggered: 1 },
   best: { symbol: 'TATASTEEL', strategy: 'Opening-range breakout', horizon: 'INTRADAY', dir: 'BUY', pct: 1.12, net: 268 },
   worst: { symbol: 'AXISBANK', strategy: 'VWAP reclaim', horizon: 'INTRADAY', dir: 'SHORT', pct: -0.64, net: -151 },

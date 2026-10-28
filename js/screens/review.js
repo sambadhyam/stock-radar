@@ -123,6 +123,7 @@ function fateText(o, perStock, held) {
   if (o.notTriggered) parts.push(t('review.fate.notTriggered', { n: o.notTriggered }));
   if (o.tooPricey) parts.push(t('review.fate.tooPricey', { n: o.tooPricey, cap: fmt.money(perStock || 0) }));
   if (o.noData) parts.push(t('review.fate.noData', { n: o.noData }));
+  if (o.pending) parts.push(t('review.fate.pending', { n: o.pending }));
   if (o.open) parts.push(t('review.fate.open', { n: o.open }));
   if (o.other) parts.push(t('review.fate.other', { n: o.other }));
   return parts.join(', ');

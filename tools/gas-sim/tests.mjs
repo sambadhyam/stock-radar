@@ -115,6 +115,7 @@ function world(sim, opts = {}) {
         const from = new Date(body.fromdate.replace(' ', 'T') + ':00+05:30'), to = new Date(body.todate.replace(' ', 'T') + ':00+05:30');
         if (w.rateLimitNext > 0) { w.rateLimitNext--; return { code: 403, body: { status: false, message: 'Access denied because of exceeding access rate', errorcode: 'AB1019' } }; }
         if (w.refuse && w.refuse[body.symboltoken] > 0) { w.refuse[body.symboltoken]--; return { code: 403, body: { status: false, message: 'Access denied because of exceeding access rate', errorcode: 'AB1019' } }; }
+        if (w.refuseWhen && w.refuseWhen(body)) return { code: 403, body: 'Access denied because of exceeding access rate' }; // plain text, as Angel One sends it
         const custom = w.candleGen && w.candleGen(body.symboltoken, body.interval, from, to);
         if (custom) {
           const rows = custom.filter((c) => c.t >= from.getTime() && c.t <= to.getTime()).map((c) => [new Date(c.t).toISOString(), c.o, c.h, c.l, c.c, c.v]);
@@ -779,7 +780,86 @@ test('end of day: price history stops after 20 minutes of work, so a slow evenin
   const calls = w.candleCalls.length;
   eq(G.Scans.updateHistory('2026-10-26', day, Date.now() + 200000), 'done', 'gives up on the rest');
   eq(w.candleCalls.length, calls, 'no more requests');
-  ok(/Angel One was slow today: after 20 minutes \d+ stocks were still without today's candle/.test(day.histNote), day.histNote);
+  ok(/Angel One answered slowly today: after 20 minutes \d+ stocks were still without today's candle/.test(day.histNote), day.histNote);
+  ok(/Tomorrow's update fills in the gap/.test(day.histNote), day.histNote);
+  const busy = { day: '2026-10-26', histProbed: 1, histMs: 20 * 60000, histReq: 900, histRefused: 610 };
+  G.Scans.updateHistory('2026-10-26', busy, Date.now() + 200000);
+  ok(/Angel One turned away 610 of 900 requests today \("exceeding access rate"/.test(busy.histNote), busy.histNote);
+});
+
+/** Angel One's "exceeding access rate" answer, for about half the requests at random (it sends it even at low rates). */
+function refuseHalf(seed) {
+  let x = seed >>> 0;
+  return () => ((x = (x * 1664525 + 1013904223) >>> 0) / 4294967296) < 0.5;
+}
+
+test('end of day: Angel One turning away half the requests does not slow the price history to a crawl', () => {
+  const { G, sim, w } = marketWorld();
+  G.MarketCal._now = at('2026-10-23T21:00:00+05:30');
+  G.loadHistory();
+  G.MarketCal._now = at('2026-10-26T16:05:00+05:30');
+  w.daily['99926000'] = SC.dailyFrom(SC.trend(300, 20000, 0.08), { end: '2026-10-26', vol: 0 });
+  const quietMon = SC.dailyFrom(SC.trend(300, 100, 0.01), { end: '2026-10-26', vol: 2e6 });
+  w.candleGen = (token, interval) => (interval === 'ONE_DAY' ? w.daily[token] || (BY_TOKEN[token] ? quietMon : null) : null);
+  const clock = slowClock(G, w, 300, sim); // each request takes 0.3 s
+  const start = clock.now, coin = refuseHalf(42);
+  w.refuseWhen = (body) => body.interval === 'ONE_DAY' && coin();
+  const day = { day: '2026-10-26' };
+  let runs = 0, r;
+  do { r = G.Scans.updateHistory('2026-10-26', day, clock.now + 240000); runs++; clock.now += 30000; } while (r !== 'done' && runs < 40);
+  eq(r, 'done', 'finished');
+  const targets = G.Backfill.targets();
+  // Every stock (the test's data has today's candle for all of them) got it: turned away four times means asked again next run.
+  const missing = targets.filter((it) => BY_TOKEN[it.token] && !(G.History.lastDay(it.key) >= 20261026));
+  eq(missing.length, 0, 'every stock got today\'s candle: ' + missing.slice(0, 5).map((it) => it.key));
+  ok(!day.histNote, 'no note: ' + day.histNote);
+  ok(day.histRefused > targets.length * 0.6, 'about half turned away: ' + day.histRefused + ' of ' + day.histReq);
+  // At 0.3 s a request and three at a time, the work itself takes well under a second a stock even when half are turned
+  // away; the 0.6.5 pause that grew to 16 s took about 6 s a stock here.
+  const perStock = (clock.now - start - runs * 30000) / targets.length;
+  ok(perStock < 1500, 'about ' + Math.round(perStock) + ' ms a stock over ' + runs + ' runs');
+  ok(sim.ss.getSheetByName('HealthLog').dump().some((row) => /Angel One turned away \d+ of \d+ requests/.test(row.join(' '))), 'each run logs the refusals');
+});
+
+test('candles: only a batch turned away completely waits longer (2 s, then 5 s), and never more', () => {
+  const { G, sim, w } = marketWorld();
+  const clock = slowClock(G, w, 300, sim), sleeps = [];
+  const sleep = G.Utilities.sleep;
+  G.Utilities.sleep = (ms) => { sleeps.push(ms); sleep(ms); };
+  let n = 0;
+  w.refuseWhen = () => ++n <= 12; // Angel One refuses everything for a moment (four whole batches), then answers
+  const items = ['BIG001', 'BIG002', 'BIG003', 'MID010', 'MID011', 'MID012'].map((s) => ({ key: s, token: TOKENS[s], from: at('2026-10-20T09:15:00+05:30'), to: at('2026-10-26T15:30:00+05:30') }));
+  const res = G.Angel.candlesMany(items, 'ONE_DAY', {});
+  eq(Object.keys(res.data).length, 6, 'all six arrived');
+  eq(res.refused, 12, 'twelve refusals counted');
+  eq(JSON.stringify(sleeps.slice(0, 5)), JSON.stringify([2000, 2000, 5000, 5000, 1100]), 'waits: ' + sleeps.join(', '));
+  ok(Math.max.apply(null, sleeps) <= 5000, 'never longer than 5 s');
+  // A batch with only some turned away keeps the normal pace, and the refused ones go to the back of the queue
+  // (asked alone at the end, a refused one waits 2 s like any batch turned away completely).
+  sleeps.length = 0; n = 0; w.candleCalls = [];
+  w.refuseWhen = (body) => body.symboltoken === TOKENS.BIG001 && ++n <= 2;
+  const res2 = G.Angel.candlesMany(items, 'ONE_DAY', {});
+  eq(Object.keys(res2.data).length, 6, 'all six again');
+  eq(JSON.stringify(sleeps), JSON.stringify([1100, 1100, 2000]), 'normal pace, then a short wait for the last one: ' + sleeps.join(', '));
+  eq(w.candleCalls[3].symboltoken, TOKENS.MID010, 'the next stocks went first');
+  void clock;
+});
+
+test('end of day: a stock turned away on every try is asked again in the next run, not given up', () => {
+  const { G, w } = marketWorld();
+  G.MarketCal._now = at('2026-10-23T21:00:00+05:30');
+  G.loadHistory();
+  G.MarketCal._now = at('2026-10-26T16:05:00+05:30');
+  w.daily['99926000'] = SC.dailyFrom(SC.trend(300, 20000, 0.08), { end: '2026-10-26', vol: 0 });
+  const quietMon = SC.dailyFrom(SC.trend(300, 100, 0.01), { end: '2026-10-26', vol: 2e6 });
+  w.candleGen = (token, interval) => (interval === 'ONE_DAY' ? w.daily[token] || (BY_TOKEN[token] ? quietMon : null) : null);
+  w.refuse = { [TOKENS.BIG001]: 5 }; // four tries in the first run, then once more in the second
+  const day = { day: '2026-10-26' };
+  eq(G.Scans.updateHistory('2026-10-26', day, Date.now() + 600000), 'more', 'one stock still to get');
+  eq(day.histLeft, 1, 'counted as left: ' + day.histLeft);
+  eq(day.histFailed || 0, 0, 'not counted as failed');
+  eq(G.Scans.updateHistory('2026-10-26', day, Date.now() + 600000), 'done', 'second run');
+  eq(G.History.lastDay('BIG001'), 20261026, 'got it in the second run');
 });
 
 test('end of day: the menu finishes a day the older code left half done', () => {
@@ -1473,16 +1553,18 @@ test('session review: every alert is accounted for, and each filter is judged ag
     ...Array.from({ length: 6 }, () => row({ track: 'shadow', telegram: dayNote, netPct: -0.06, netPnl: -6 })),
     row({ track: 'shadow', telegram: dayNote, outcome: 'NOT_TRIGGERED', netPct: '', netPnl: '' }),
     ...Array.from({ length: 5 }, () => row({ track: 'shadow', horizon: 'SWING', strategy: 'ema-pullback', direction: 'BUY', telegram: 'not sent: blocked by the Bear regime, tracked silently', status: 'OPEN', closedAt: '', outcome: '', netPct: '', netPnl: '' })),
+    row({ symbol: 'INFY', status: 'OPEN', closedAt: '', outcome: '', paperQty: '', grossPnl: '', charges: '', netPnl: '', netPct: '' }), // its 1-minute prices did not come yet
   ]);
   const f = G.SessionReview.build(day);
-  eq(JSON.stringify(f.alerts.fate), JSON.stringify({ traded: 4, notTriggered: 1, tooPricey: 1, noData: 0, open: 0, other: 0 }));
+  eq(JSON.stringify(f.alerts.fate), JSON.stringify({ traded: 4, notTriggered: 1, tooPricey: 1, noData: 0, pending: 1, open: 0, other: 0 }));
   eq(f.alerts.blocked, 12); eq(f.alerts.heldFate.traded, 6); eq(f.alerts.heldFate.open, 5); eq(f.alerts.heldFate.notTriggered, 1);
   eq(f.paper.n, 4); eq(f.paper.gross, 20); eq(f.paper.net, -20); eq(f.paper.charges, 40); // the charges turned a small gain into a loss
   eq(f.filters.length, 1); eq(f.filters[0].kind, 'day'); eq(f.filters[0].takenAvgPct, -0.04); eq(f.filters[0].verdict, 'same');
   const msg = G.SessionReview.message(f);
   if (process.env.DUMP_TG) console.log('\n=== REVIEW ===\n' + msg + '\n=== FACTS ===\n' + G.SessionReview.factLines(f).join('\n'));
   ok(msg.includes('after ₹40 charges (+₹20 before them)'), msg);
-  ok(msg.includes('📣 6 alerts today: 4 paper trades, 1 never reached the entry, 1 was too pricey for the ₹10,000 per-stock limit (counted in % only).'), msg);
+  ok(msg.includes('📣 7 alerts today: 4 paper trades, 1 never reached the entry, 1 was too pricey for the ₹10,000 per-stock limit (counted in % only), 1 not judged yet.'), msg);
+  ok(msg.includes('⏳ 1 of today\'s intraday alerts is not judged yet.'), msg);
   ok(msg.includes('🔕 Day\'s direction: 6 held back, averaged −0.06% a trade against −0.04% for the trades taken: about the same, so no verdict yet'), msg);
   ok(msg.includes('🔕 Of the 12 held back today: 6 were judged, 1 never reached the entry, 5 still open.'), msg);
   ok(!/the filter helped/.test(msg), 'no claim the numbers do not support');

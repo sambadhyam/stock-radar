@@ -444,7 +444,11 @@ var Scans = {
     var todo = list.filter(function (it) { return !tried[it.key] && !(History.lastDay(it.key) >= todayN); });
     // Never let a slow evening eat the day's trigger time: after 20 minutes of work, scan with what has arrived.
     if ((day.histMs || 0) >= this.HIST_BUDGET_MS && todo.length) {
-      day.histNote = 'Angel One was slow today: after 20 minutes ' + todo.length + ' stock' + (todo.length === 1 ? ' was' : 's were') + ' still without today\'s candle, so the end-of-day scan skipped ' + (todo.length === 1 ? 'it' : 'them') + '.';
+      var many = todo.length !== 1, req = day.histReq || 0, ref = day.histRefused || 0;
+      day.histNote = (req && ref * 5 >= req
+        ? 'Angel One turned away ' + Fmt.num(ref, 0) + ' of ' + Fmt.num(req, 0) + ' requests today ("exceeding access rate", which it also sends at low rates)'
+        : 'Angel One answered slowly today') + ': after 20 minutes ' + todo.length + ' stock' + (many ? 's were' : ' was') +
+        ' still without today\'s candle, so the end-of-day scan skipped ' + (many ? 'them' : 'it') + '. Tomorrow\'s update fills in the gap.';
       History.saveMeta();
       return 'done';
     }
@@ -457,19 +461,24 @@ var Scans = {
     store(res);
     res.nodata.forEach(function (key) { if (!History.has(key)) History.put(key, []); });
     History.flush();
-    var left = {};
+    var left = {}, later = {}, again = (res.later || []).length;
     res.left.forEach(function (key) { left[key] = true; });
-    todo.forEach(function (it) { if (!left[it.key]) tried[it.key] = 1; });
+    // Turned away on every try is Angel One's busy answer, not a problem with the stock: the next run asks again.
+    (res.later || []).forEach(function (key) { later[key] = true; });
+    todo.forEach(function (it) { if (!left[it.key] && !later[it.key]) tried[it.key] = 1; });
     this.saveHistTried(todayN, tried);
-    var failed = Object.keys(res.failed);
+    var failed = Object.keys(res.failed).filter(function (key) { return !later[key]; });
     day.histFailed = (day.histFailed || 0) + failed.length;
     day.histRuns = (day.histRuns || 0) + 1;
-    day.histLeft = res.left.length;
+    day.histLeft = res.left.length + again;
+    day.histReq = (day.histReq || 0) + (res.requests || 0);
+    day.histRefused = (day.histRefused || 0) + (res.refused || 0);
     day.histMs = (day.histMs || 0) + (Date.now() - t0);
     Health.log('endOfDay', 'history', true, Date.now() - t0, Object.keys(res.data).length, 'Daily candles: ' + Object.keys(res.data).length + ' updated, ' +
-      res.nodata.length + ' without data, ' + failed.length + ' failed, ' + res.left.length + ' left for the next run, ' + (res.retries || 0) + ' retries (run ' + day.histRuns + ')');
+      res.nodata.length + ' without data, ' + failed.length + ' failed, ' + day.histLeft + ' left for the next run; Angel One turned away ' +
+      (res.refused || 0) + ' of ' + (res.requests || 0) + ' requests (run ' + day.histRuns + ')');
     if (failed.length) Health.log('endOfDay', 'angel', false, 0, failed.length, 'Daily candles missing for ' + failed.slice(0, 8).join(', ') + ': ' + res.failed[failed[0]]);
-    if (res.left.length) return 'more';
+    if (day.histLeft) return 'more';
     History.saveMeta();
     return 'done';
   },

@@ -102,7 +102,7 @@ const en = {
   'review.fate.judged': '{n} judged',
   'review.fate.notTriggered': '{n} never reached the entry',
   'review.fate.tooPricey': '{n} too pricey for the {cap} per-stock limit (counted in % only)',
-  'review.fate.noData': '{n} without price data', 'review.fate.open': '{n} still open', 'review.fate.other': '{n} other',
+  'review.fate.noData': '{n} without price data', 'review.fate.pending': '{n} not judged yet', 'review.fate.open': '{n} still open', 'review.fate.other': '{n} other',
   'review.alertsFate': '{n} alerts sent ({b} buys, {s} shorts): {parts}. {x} more held back by the market filters.',
   'review.alertsFate.one': '1 alert sent ({b} buys, {s} shorts): {parts}. {x} more held back by the market filters.',
   'review.opened': 'New swing and longer signals',

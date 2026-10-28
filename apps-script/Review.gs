@@ -730,14 +730,14 @@ var SessionReview = {
     }).sort(function (a, b) { return b.n - a.n; });
     // What became of every alert made today, so the numbers add up (sent ones, and the ones held back).
     var fateOf = function (r) {
-      if (r.status !== 'CLOSED') return 'open';
+      if (r.status !== 'CLOSED') return r.horizon === 'INTRADAY' ? 'pending' : 'open';
       if (r.outcome === 'NOT_TRIGGERED') return 'notTriggered';
       if (r.outcome === 'NO_DATA') return 'noData';
       if (REVIEW_OUTCOMES.indexOf(r.outcome) < 0) return 'other';
       return isMain(r) && !(Number(r.paperQty) > 0 && R.num(r.netPnl)) ? 'tooPricey' : 'traded';
     };
     var fate = function (list) {
-      var o = { traded: 0, notTriggered: 0, tooPricey: 0, noData: 0, open: 0, other: 0 };
+      var o = { traded: 0, notTriggered: 0, tooPricey: 0, noData: 0, pending: 0, open: 0, other: 0 };
       list.forEach(function (r) { if (r.direction !== 'EXIT') o[fateOf(r)]++; });
       return o;
     };
@@ -792,6 +792,7 @@ var SessionReview = {
     if (o.notTriggered) parts.push(o.notTriggered + ' never reached the entry');
     if (o.tooPricey) parts.push(plural(o.tooPricey, 'was', 'were') + ' too pricey for the ' + Fmt.money(perStock, 0) + ' per-stock limit (counted in % only)');
     if (o.noData) parts.push(o.noData + ' had no price data');
+    if (o.pending) parts.push(o.pending + ' not judged yet');
     if (o.open) parts.push(o.open + ' still open');
     if (o.other) parts.push(o.other + ' other');
     return parts.join(', ');
@@ -836,7 +837,7 @@ var SessionReview = {
     f.byTime.forEach(function (g) { L.push('Intraday alerts from ' + g.label + ': ' + g.n + ' trades, ' + g.won + ' won, net ' + m(g.net) + '.'); });
     var names = { regime: 'the market regime filter', switch: 'the Bear/Bull switches', day: 'the day\'s-direction filter' }, self = this;
     f.filters.forEach(function (g) { L.push('Signals held back by ' + (names[g.kind] || g.kind) + (g.intraday === false ? ' (swing and longer)' : g.intraday ? ' (intraday)' : '') + ' and closed today: ' + g.n + ', ' + g.won + ' would have won; they ' + self.filterText(g) + '.'); });
-    if (f.alerts.pending) L.push(f.alerts.pending + ' of today\'s intraday alerts are not judged yet.');
+    if (f.alerts.pending) L.push(f.alerts.pending + ' of today\'s intraday alerts ' + (f.alerts.pending === 1 ? 'is' : 'are') + ' not judged yet.');
     if (f.open) L.push('Paper trades still open: ' + f.open.n + ', unrealised ' + m(f.open.unrealised) + '.');
     if (f.total) L.push('Since the paper account started: ' + m(f.total.net) + ' (' + Fmt.pct(f.total.returnPct) + ') over ' + f.total.closed + ' closed trades.');
     return L;
@@ -890,7 +891,7 @@ var SessionReview = {
     }
     L.push('');
     if (f.alerts.n && f.alerts.fate) L.push('📣 ' + f.alerts.n + ' alert' + (f.alerts.n === 1 ? '' : 's') + ' today: ' + this.fateText(f.alerts.fate, f.alerts.perStock) + (f.alerts.exit ? ', ' + f.alerts.exit + ' exit check' + (f.alerts.exit === 1 ? '' : 's') : '') + '.');
-    if (f.alerts.pending) L.push('⏳ ' + f.alerts.pending + ' of today\'s intraday alerts are not judged yet.');
+    if (f.alerts.pending) L.push('⏳ ' + f.alerts.pending + ' of today\'s intraday alerts ' + (f.alerts.pending === 1 ? 'is' : 'are') + ' not judged yet.');
     if (f.open) L.push('📂 Still open: ' + f.open.n + ' paper trade' + (f.open.n === 1 ? '' : 's') + (f.open.n ? ', unrealised ' + signed(f.open.unrealised) : ''));
     if (f.total) L.push('🧾 Since start: ' + signed(f.total.net) + ' (' + Fmt.pct(f.total.returnPct) + ') over ' + f.total.closed + ' closed ' + (f.total.closed === 1 ? 'trade' : 'trades'));
     L.push('<i>Paper trading with virtual money, after estimated Zerodha charges. Details: app → Results → Reports.</i>');

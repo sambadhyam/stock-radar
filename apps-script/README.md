@@ -317,6 +317,18 @@ That's all. The schedule keeps running, and the backtest starts by itself after 
 3. Reload the sheet and run **Stock Radar → 1. Create sheets** (adds the new settings to Config). If today's closing summary has not come and it is after 16:00, run **Stock Radar → Finish today's end-of-day work**.
 4. In the app, Settings shows "Connected to the engine (version 0.6.6)" at the bottom.
 
+## Update 0.6.7: price history keeps its pace when Angel One turns requests away
+
+- **Fix:** on 28 Oct Angel One turned away about half of the evening's price requests with "exceeding access rate" (it sends that even at very low rates). The 0.6.5 rule waited longer and longer after each refusal (up to 16 seconds), so after 20 minutes 362 stocks still had no candle for the day and the end-of-day scan skipped them. Now the other stocks carry on at the normal pace, a refused one is asked again a little later, and one refused four times is asked again in the next run. The same rule serves the intraday scans and the backtest download. The summary now says whether Angel One turned requests away or answered slowly.
+- **Session review:** an intraday alert whose 1-minute prices have not come yet is counted as "not judged yet" instead of "still open".
+
+1. Paste three files (open each link, **Ctrl+A**, **Ctrl+C**; in Apps Script click in the matching file, **Ctrl+A**, **Ctrl+V**), then **Ctrl+S** once. Any time when nothing is running: after the closing summary has arrived, and before 09:00 the next morning:
+   [Data.gs](https://raw.githubusercontent.com/sambadhyam/stock-radar/main/apps-script/Data.gs) → `Data`,
+   [Review.gs](https://raw.githubusercontent.com/sambadhyam/stock-radar/main/apps-script/Review.gs) → `Review`,
+   [Signals.gs](https://raw.githubusercontent.com/sambadhyam/stock-radar/main/apps-script/Signals.gs) → `Signals`.
+2. Publish the web app again: **Deploy → Manage deployments → ✏️ → Version: New version → Deploy**.
+3. In the app, Settings shows "Connected to the engine (version 0.6.7)" at the bottom.
+
 ## Backtests
 
 The engine replays history through exactly the rules of the live paper record (same strategy code, fills, exits and Zerodha charges) and sends a **🧪 Backtest Baseline** report to Telegram and email. The numbers also go into the **Backtests** sheet, the **Reports** list and the app (More → Backtest lab, and each strategy card in Results).
