@@ -375,11 +375,36 @@ var Review = {
     return /against the day/.test(s) ? 'day' : /your setting/.test(s) ? 'switch' : 'regime';
   },
 
+  /**
+   * The filter a held-back trade is counted under: the regime pause is split into its two halves, the downtrend
+   * (Bear) and high volatility (India VIX), because they behave differently (PLAN §3.21).
+   */
+  filterKind: function (x) {
+    var k = x.blockedBy || 'regime';
+    if (k !== 'regime') return k;
+    return x.regime === 'BEAR' ? 'regime-bear' : x.regime === 'HIGH_VOL' ? 'regime-vol' : 'regime';
+  },
+  FILTER_NAMES: { regime: 'the regime', 'regime-bear': 'the downtrend pause', 'regime-vol': 'the high-volatility pause', switch: 'your Bear/Bull switch', day: 'the day\'s direction' },
+
   rules: function () {
+    var t = Config.get('graduationMinT');
     return {
       minTrades: Number(Config.get('graduationMinTrades')) || 30, minDays: Number(Config.get('graduationMinDays')) || 0,
       minPF: Number(Config.get('graduationMinPF')) || 1.3, maxDrawdownPct: Number(Config.get('graduationMaxDrawdownPct')) || 15,
+      minT: t === '' || t === null || t === undefined ? 2 : Number(t) || 0, // 0 switches the luck test off
     };
+  },
+
+  /**
+   * One strategy's status decision: the latest window of its main trades, its whole record for the luck test,
+   * and the Backtest Baseline's verdict. trades: closed trades (any strategy, any track).
+   */
+  judge: function (id, trades, rules, cap) {
+    var all = trades.filter(function (x) { return x.strategy === id && x.track === 'main'; });
+    var m = SRCore.metrics(this.window(all), { capital: cap }), whole = SRCore.metrics(all, { capital: cap }), r = {};
+    Object.keys(rules).forEach(function (k) { r[k] = rules[k]; });
+    r.btVerdict = typeof Backtest !== 'undefined' ? Backtest.verdictOf(id) : '';
+    return { m: m, whole: whole, g: SRCore.graduate(m, r, whole) };
   },
 
   /** The latest closed main trades a strategy is judged on (all of them until there are enough). */
@@ -417,8 +442,7 @@ var Review = {
     var open = {};
     rows.forEach(function (r) { if (r.status === 'ACTIVE' && (r.track || 'main') === 'main') open[r.strategy] = (open[r.strategy] || 0) + 1; });
     t.rows.forEach(function (o) {
-      var list = self.window(trades.filter(function (x) { return x.strategy === o.id && x.track === 'main'; }));
-      var m = SRCore.metrics(list, { capital: cap }), g = SRCore.graduate(m, rules);
+      var j = self.judge(o.id, trades, rules, cap), m = j.m, g = j.g;
       var b = function (v) { return v === null ? '' : v; };
       o.trades = m.trades; o.wins = m.wins; o.losses = m.losses; o.flats = m.flats; o.winRatePct = b(m.winRatePct);
       o.avgNetPct = b(m.expectancyPct); o.expectancyPct = b(m.expectancyPct); o.profitFactor = b(m.profitFactor);
@@ -546,8 +570,7 @@ var Review = {
     t.rows.forEach(function (o) {
       var st = SRCore.strategy(String(o.id));
       if (!st) return;
-      var m = SRCore.metrics(self.window(trades.filter(function (x) { return x.strategy === st.id && x.track === 'main'; })), { capital: cap });
-      var g = SRCore.graduate(m, rules), from = String(o.status || 'PAPER').toUpperCase();
+      var g = self.judge(st.id, trades, rules, cap).g, from = String(o.status || 'PAPER').toUpperCase();
       o.statusReason = g.reason;
       if (g.status === from) return;
       o.status = g.status; o.statusSince = now;
@@ -575,7 +598,8 @@ var Review = {
   filterCheckLines: function (trades, cap) {
     var L = [], shadow = trades.filter(function (x) { return x.track === 'shadow'; });
     if (!shadow.length) return L;
-    var names = { regime: 'by the regime', switch: 'by your Bear/Bull switch', day: 'by the day\'s direction' };
+    var names = {}, self = this;
+    Object.keys(this.FILTER_NAMES).forEach(function (k) { names[k] = 'by ' + self.FILTER_NAMES[k]; });
     var line = function (label, sh, mn) {
       var a = SRCore.metrics(sh, { capital: cap }), b = SRCore.metrics(mn, { capital: cap });
       return label + ': blocked ' + a.trades + ' averaged ' + Fmt.pct(a.expectancyPct) + ' (win ' + a.winRatePct + '%)' +
@@ -587,10 +611,10 @@ var Review = {
       if (!sh.length) return;
       var mn = trades.filter(function (x) { return x.track === 'main' && x.horizon === h; });
       var kinds = {};
-      sh.forEach(function (x) { kinds[x.blockedBy || 'regime'] = true; });
+      sh.forEach(function (x) { kinds[self.filterKind(x)] = true; });
       var ks = Object.keys(kinds);
       if (ks.length === 1) { L.push(line((AlertBook.HORIZON_NAMES[h] || h) + ' (' + names[ks[0]] + ')', sh, mn)); return; }
-      ks.forEach(function (k) { L.push(line((AlertBook.HORIZON_NAMES[h] || h) + ' ' + names[k], sh.filter(function (x) { return (x.blockedBy || 'regime') === k; }), mn)); });
+      ks.forEach(function (k) { L.push(line((AlertBook.HORIZON_NAMES[h] || h) + ' ' + names[k], sh.filter(function (x) { return self.filterKind(x) === k; }), mn)); });
     });
     return L;
   },
@@ -614,8 +638,7 @@ var Review = {
     var L = ['📋 <b>Readiness report · day ' + dayN + ' of paper trading</b>', ''];
     var groups = { LIVE_READY: [], PAPER: [], REJECTED: [], MORE: [] };
     SRCore.STRATEGIES.forEach(function (st) {
-      var m = SRCore.metrics(self.window(trades.filter(function (x) { return x.strategy === st.id && x.track === 'main'; })), { capital: cap });
-      var g = SRCore.graduate(m, rules);
+      var j = self.judge(st.id, trades, rules, cap), m = j.m, g = j.g;
       var key = g.status === 'PAPER' && (m.trades < rules.minTrades || m.days < rules.minDays) ? 'MORE' : g.status;
       groups[key].push({ st: st, m: m, g: g });
     });
@@ -629,15 +652,16 @@ var Review = {
     show('Needs more data', groups.MORE);
     show('Paper: enough trades, not good enough yet', groups.PAPER);
     show('Rejected', groups.REJECTED);
-    L.push('Live-ready needs ' + rules.minTrades + '+ closed trades' + (rules.minDays ? ' on ' + rules.minDays + '+ different days' : '') + ', a positive average after charges, profit factor ≥ ' + rules.minPF + ', drawdown ≤ ' + rules.maxDrawdownPct + '% and beating Nifty 50 over the same holding periods.');
+    L.push('Live-ready needs ' + rules.minTrades + '+ closed trades' + (rules.minDays ? ' on ' + rules.minDays + '+ different days' : '') + ', a positive average after charges, profit factor ≥ ' + rules.minPF + ', drawdown ≤ ' + rules.maxDrawdownPct + '%, beating Nifty 50 over the same holding periods' +
+      (rules.minT ? ', a whole record that luck is unlikely to explain' : '') + ' and no ⛔ in the Backtest Baseline.');
     L.push('Performance screen: https://sambadhyam.github.io/stock-radar/#/results (shows live numbers once the app is connected in Phase 4).');
     var text = L.join('\n');
     Notify.safeTelegram(text);
     if (Config.get('emailDigest')) { try { Notify.email('Readiness report, day ' + dayN, Notify.htmlFromTelegram(text)); } catch (e) { ErrorLog.add('readinessEmail', e); } }
     this.saveReport('readiness', 'Readiness report, day ' + dayN, groups.LIVE_READY.length + ' live-ready, ' + groups.REJECTED.length + ' rejected, ' + groups.MORE.length + ' need more data', {
       day: dayN, verdicts: SRCore.STRATEGIES.map(function (st) {
-        var m = SRCore.metrics(self.window(trades.filter(function (x) { return x.strategy === st.id && x.track === 'main'; })), { capital: cap });
-        return { id: st.id, status: SRCore.graduate(m, rules).status, trades: m.trades, winRatePct: m.winRatePct, expectancyPct: m.expectancyPct, profitFactor: m.profitFactor };
+        var j = self.judge(st.id, trades, rules, cap), m = j.m;
+        return { id: st.id, status: j.g.status, trades: m.trades, winRatePct: m.winRatePct, expectancyPct: m.expectancyPct, profitFactor: m.profitFactor };
       }),
     });
     return text;

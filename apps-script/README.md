@@ -329,6 +329,26 @@ That's all. The schedule keeps running, and the backtest starts by itself after 
 2. Publish the web app again: **Deploy → Manage deployments → ✏️ → Version: New version → Deploy**.
 3. In the app, Settings shows "Connected to the engine (version 0.6.7)" at the bottom.
 
+## Update 0.6.8: what the first Backtest Baseline changed, and an explorer for its trades
+
+- **Medium-term alerts need a signal score of 70 or more** to reach Telegram (app → Settings → Alerts → "Medium-term: only signal score 70+", on by default). In your baseline and in a recheck on 2015–2026 prices, medium-term signals scoring 70 and up did better in every period and for each medium-term strategy. The lower ones stay paper-only in the app.
+- **The signal score is now the strategy's rule score alone**, the number the backtest checks. It used to be mixed with the strategy's paper record, which nothing had tested.
+- **Live-ready needs more than a lucky run:** the strategy's whole paper record must be clearly above what luck gives (`graduationMinT`, 2), and the Backtest Baseline must not say it loses. The reason in the app says roughly how many more trades would settle it.
+- **The filter check is split** into the downtrend pause and the high-volatility pause. The downtrend half helps; the high-volatility half only "cost" money because of the 2020–21 recovery.
+- **Stock check:** stocks that did well with a strategy in the first half of the backtest did no better in the second half, so the app does not add stocks to the watchlist by itself. The report and the app show this check at every run.
+- **Explorer (app → More → Backtest lab → Explore all the trades):** every baseline trade, filtered by strategy, buys or shorts, taken or held back, year, market, signal score and stock, broken down by year, strategy, stock, market, score, direction, time of day or filter. The first load takes up to a minute; after that the trades stay on the phone.
+
+1. Paste six files (open each link, **Ctrl+A**, **Ctrl+C**; in Apps Script click in the matching file, **Ctrl+A**, **Ctrl+V**), then **Ctrl+S** once. Any time when nothing is running: after the closing summary has arrived and before 09:00 the next morning:
+   [Api.gs](https://raw.githubusercontent.com/sambadhyam/stock-radar/main/apps-script/Api.gs) → `Api`,
+   [Core.gs](https://raw.githubusercontent.com/sambadhyam/stock-radar/main/apps-script/Core.gs) → `Core`,
+   [Data.gs](https://raw.githubusercontent.com/sambadhyam/stock-radar/main/apps-script/Data.gs) → `Data`,
+   [Lab.gs](https://raw.githubusercontent.com/sambadhyam/stock-radar/main/apps-script/Lab.gs) → `Lab`,
+   [Review.gs](https://raw.githubusercontent.com/sambadhyam/stock-radar/main/apps-script/Review.gs) → `Review`,
+   [Signals.gs](https://raw.githubusercontent.com/sambadhyam/stock-radar/main/apps-script/Signals.gs) → `Signals`.
+2. Publish the web app again: **Deploy → Manage deployments → ✏️ → Version: New version → Deploy**.
+3. Reload the sheet and run **Stock Radar → 1. Create sheets** (adds the two new settings to Config).
+4. In the app, Settings shows "Connected to the engine (version 0.6.8)" at the bottom.
+
 ## Backtests
 
 The engine replays history through exactly the rules of the live paper record (same strategy code, fills, exits and Zerodha charges) and sends a **🧪 Backtest Baseline** report to Telegram and email. The numbers also go into the **Backtests** sheet, the **Reports** list and the app (More → Backtest lab, and each strategy card in Results).

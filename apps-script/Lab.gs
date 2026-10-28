@@ -10,6 +10,7 @@
  *   bt-context.json   the market on each day (regime, relative strength), worked out without hindsight
  *   btd-00…11.json, bti-00…11.json   backtest trades of the daily and the intraday strategies
  *   bt-result.json    the summaries and equity curves the app shows
+ *   bt-trades.json    every trade of the latest run in one compact file, for the app's explorer
  *
  * The backtest runs in steps outside market hours (after 18:15 on trading days, any time on other days),
  * about four minutes each, one minute apart, and sends the Backtest Baseline report when it is done.
@@ -494,16 +495,23 @@ var Backtest = {
 
   /* ---------- Step 4: the report ---------- */
 
-  report: function (j) {
-    var self = this, cap = Review.sizing().capital, rules = Review.rules(), all = [], parts = { daily: { symbols: 0, open: 0, nt: 0 }, intraday: { symbols: 0, open: 0, nt: 0 } };
+  /** Every trade of one run, read back from its data files, with the counts per kind. */
+  allTrades: function (runId) {
+    var self = this, all = [], parts = { daily: { symbols: 0, open: 0, nt: 0 }, intraday: { symbols: 0, open: 0, nt: 0 } };
     for (var p = 0; p < History.PACKS; p++) {
       [['btd-', 'daily'], ['bti-', 'intraday']].forEach(function (f) {
         var d = DataFile.read(f[0] + DataFile.pad(p) + '.json');
-        if (!d || d.runId !== j.runId) return;
+        if (!d || d.runId !== runId) return;
         parts[f[1]].symbols += d.symbols || 0; parts[f[1]].open += d.open || 0; parts[f[1]].nt += d.notTriggered || 0;
         d.trades.forEach(function (a) { all.push(self.unpack(a)); });
       });
     }
+    return { all: all, parts: parts };
+  },
+
+  report: function (j) {
+    var self = this, cap = Review.sizing().capital, rules = Review.rules();
+    var read = this.allTrades(j.runId), all = read.all, parts = read.parts;
     var ctx = this.context(), intraDays = this.intraDays();
     var result = {
       runId: j.runId, at: Date.now(), capital: cap, riskPct: Review.sizing().riskPct, universe: this.universeName(),
@@ -531,7 +539,9 @@ var Backtest = {
     });
     result.filter = this.filterCheck(all, cap);
     result.scoreCheck = this.scoreCheck(all, cap);
+    result.stockCheck = this.stockCheck(all);
     DataFile.write('bt-result.json', result);
+    try { this.tradesFile(j.runId, all); } catch (e) { ErrorLog.add('backtestTradesFile', e); }
     this._sum = null;
     var sum = { runId: j.runId, at: result.at, universe: result.universe, daily: result.daily, intraday: { from: result.intraday.from, to: result.intraday.to, sessions: result.intraday.sessions, symbols: result.intraday.symbols }, s: compact };
     Secrets.props().setProperty(this.SUMMARY, JSON.stringify(sum));
@@ -582,19 +592,86 @@ var Backtest = {
 
   /** Signals the market filters held back, against those taken, per horizon and filter. */
   filterCheck: function (all, cap) {
-    var out = [], names = { regime: 'the regime', switch: 'your Bear/Bull switch', day: 'the day\'s direction' };
+    var out = [], names = Review.FILTER_NAMES, order = ['regime-bear', 'regime-vol', 'regime', 'switch', 'day'];
     ['INTRADAY', 'SWING', 'MEDIUM'].forEach(function (h) {
       var sh = all.filter(function (x) { return x.track === 'shadow' && SRCore.strategy(x.strategy) && SRCore.strategy(x.strategy).horizon === h; });
       if (!sh.length) return;
       var mn = all.filter(function (x) { return x.track === 'main' && SRCore.strategy(x.strategy) && SRCore.strategy(x.strategy).horizon === h; });
       var b = SRCore.metrics(mn, { capital: cap }), kinds = {};
-      sh.forEach(function (x) { kinds[x.blockedBy || 'regime'] = true; });
-      Object.keys(kinds).forEach(function (k) {
-        var a = SRCore.metrics(sh.filter(function (x) { return (x.blockedBy || 'regime') === k; }), { capital: cap });
+      // The regime pause is counted in its two halves: the downtrend and high volatility behave differently.
+      sh.forEach(function (x) { kinds[Review.filterKind(x)] = true; });
+      order.filter(function (k) { return kinds[k]; }).forEach(function (k) {
+        var a = SRCore.metrics(sh.filter(function (x) { return Review.filterKind(x) === k; }), { capital: cap });
         out.push({ horizon: h, filter: k, by: names[k], blocked: a.trades, blockedAvg: a.expectancyPct, blockedWin: a.winRatePct, taken: b.trades, takenAvg: b.expectancyPct, takenWin: b.winRatePct });
       });
     });
     return out;
+  },
+
+  /**
+   * Do stocks that did well with a strategy keep doing well? Per strategy, the stocks with at least 5 trades, an
+   * average above zero and a profit factor of 1.3 or more in the first half of the trades are picked; their trades in
+   * the second half are compared with the other stocks'. Also counted: stocks that did well in both halves, against
+   * what luck alone gives (stock names shuffled within each half, 20 times). On 2017–2026 NSE prices the picks did
+   * no better than the rest (PLAN §3.22), so no stock is singled out.
+   */
+  stockCheck: function (all) {
+    var out = [], seed = 12345;
+    var rnd = function () { seed = (seed * 1664525 + 1013904223) % 4294967296; return seed / 4294967296; };
+    var stat = function (l) { var n = l.length, s = 0, g = 0, lo = 0; for (var i = 0; i < n; i++) { s += l[i]; if (l[i] > 0) g += l[i]; else lo -= l[i]; } return { n: n, sum: s, avg: n ? s / n : 0, pf: lo > 0 ? g / lo : (g > 0 ? 99 : 0) }; };
+    var good = function (st) { return st.n >= 5 && st.avg > 0 && st.pf >= 1.3; };
+    var bySym = function (list, names) { var m = {}; list.forEach(function (x, i) { var k = names ? names[i] : x.symbol; (m[k] || (m[k] = [])).push(x.netPct); }); return m; };
+    var bothGood = function (a, b) { return Object.keys(a).filter(function (k) { return good(stat(a[k])) && b[k] && good(stat(b[k])); }).length; };
+    var shuffled = function (list) { var names = list.map(function (x) { return x.symbol; }); for (var i = names.length - 1; i > 0; i--) { var j = Math.floor(rnd() * (i + 1)), t = names[i]; names[i] = names[j]; names[j] = t; } return bySym(list, names); };
+    ['INTRADAY', 'SWING', 'MEDIUM'].forEach(function (h) {
+      var mine = all.filter(function (x) { var st = SRCore.strategy(x.strategy); return x.track === 'main' && st && st.horizon === h && typeof x.netPct === 'number'; });
+      if (mine.length < 60) return;
+      var times = mine.map(function (x) { return x.dayT; }).sort(function (a, b) { return a - b; }), mid = times[Math.floor(times.length / 2)];
+      var o = { horizon: h, picks: 0, picksTrades: 0, picksSum: 0, restTrades: 0, restSum: 0, both: 0, luck: 0, from: times[0], mid: mid, to: times[times.length - 1] };
+      var ids = {};
+      mine.forEach(function (x) { ids[x.strategy] = true; });
+      Object.keys(ids).forEach(function (id) {
+        var A = mine.filter(function (x) { return x.strategy === id && x.dayT < mid; }), B = mine.filter(function (x) { return x.strategy === id && x.dayT >= mid; });
+        var a = bySym(A), b = bySym(B);
+        Object.keys(b).forEach(function (k) {
+          var sb = stat(b[k]);
+          if (a[k] && good(stat(a[k]))) { o.picksTrades += sb.n; o.picksSum += sb.sum; } else { o.restTrades += sb.n; o.restSum += sb.sum; }
+        });
+        o.picks += Object.keys(a).filter(function (k) { return good(stat(a[k])); }).length;
+        o.both += bothGood(a, b);
+        var R = 20, luck = 0;
+        for (var r = 0; r < R; r++) luck += bothGood(shuffled(A), shuffled(B));
+        o.luck += luck / R;
+      });
+      o.picksAvg = o.picksTrades ? Math.round(o.picksSum / o.picksTrades * 1000) / 1000 : null;
+      o.restAvg = o.restTrades ? Math.round(o.restSum / o.restTrades * 1000) / 1000 : null;
+      o.luck = Math.round(o.luck * 10) / 10;
+      delete o.picksSum; delete o.restSum;
+      var gap = o.picksAvg - o.restAvg, thr = h === 'INTRADAY' ? 0.05 : 0.5;
+      o.verdict = o.picksTrades < 30 || o.restAvg === null ? 'few' : Math.abs(gap) < thr ? 'same' : gap > 0 ? 'better' : 'worse';
+      out.push(o);
+    });
+    return out;
+  },
+
+  /** Every trade of a run in one compact file for the app's explorer: names listed once, one short row per trade. */
+  tradesFile: function (runId, all) {
+    var self = this, syms = [], si = {}, ids = [], ii = {}, rows = [];
+    var r = function (v, d) { return typeof v === 'number' && isFinite(v) ? Math.round(v * d) / d : null; };
+    all.forEach(function (x) {
+      if (si[x.symbol] === undefined) { si[x.symbol] = syms.length; syms.push(x.symbol); }
+      if (ii[x.strategy] === undefined) { ii[x.strategy] = ids.length; ids.push(x.strategy); }
+      rows.push([si[x.symbol], ii[x.strategy], x.track === 'shadow' ? 1 : 0, self.REG[x.regime] || 'U', Math.round(x.dayT / 60000), Math.round(x.exitT / 60000),
+        self.OUT[x.outcome] || 'E', r(x.netPct, 1000), r(x.netPnl, 100), r(x.holdDays, 1000), r(x.alphaPct, 100), x.direction === 'SHORT' ? 1 : 0,
+        x.track === 'shadow' ? Review.filterKind(x) : '', typeof x.score === 'number' ? x.score : null]);
+    });
+    var file = {
+      v: 1, runId: runId, at: Date.now(), syms: syms, strategies: ids, regimes: this.REG_BACK, outcomes: this.OUT_BACK,
+      fields: ['symbol', 'strategy', 'shadow', 'regime', 'signalMinute', 'exitMinute', 'outcome', 'netPct', 'netPnl', 'holdDays', 'alphaPct', 'short', 'heldBy', 'score'],
+      rows: rows,
+    };
+    DataFile.write('bt-trades.json', file);
+    return file;
   },
 
   writeSheet: function (r) {
@@ -645,6 +722,17 @@ var Backtest = {
       L.push('', '<b>Signal score check</b> (does a higher score do better?)');
       var hzn = { INTRADAY: 'Intraday', SWING: 'Swing', MEDIUM: 'Medium' };
       r.scoreCheck.forEach(function (c) { L.push(hzn[c.horizon] + ', score ' + c.band + ': ' + Fmt.num(c.trades, 0) + ' trades · win ' + c.winRatePct + '% · target hit ' + c.targetPct + '% · avg ' + Fmt.pct(c.avgPct)); });
+    }
+    if (r.stockCheck && r.stockCheck.length) {
+      var hzs = { INTRADAY: 'Intraday', SWING: 'Swing', MEDIUM: 'Medium' }, words = { better: 'better', same: 'about the same', worse: 'worse', few: 'too few trades to tell' };
+      L.push('', '<b>Stock check</b> (do stocks that did well with a strategy keep doing well?)');
+      r.stockCheck.forEach(function (c) {
+        L.push(hzs[c.horizon] + ': ' + c.picks + ' stock picks from the first half averaged ' + (c.picksAvg === null ? '—' : Fmt.pct(c.picksAvg)) + ' a trade in the second half, the rest ' +
+          (c.restAvg === null ? '—' : Fmt.pct(c.restAvg)) + ' (' + words[c.verdict] + '). Good in both halves: ' + c.both + ', luck alone about ' + c.luck + '.');
+      });
+      var better = r.stockCheck.filter(function (c) { return c.verdict === 'better'; });
+      L.push(better.length ? 'The picks did better for ' + better.map(function (c) { return hzs[c.horizon].toLowerCase(); }).join(' and ') + ' this time: worth watching, but one test is not proof, so no stocks were added to the watchlist.'
+        : 'Per-stock results look like luck, so no stocks are singled out.');
     }
     if (Config.get('alertsOnlyTested') !== false) {
       var quiet = Object.keys(r.strategies).filter(function (id) { return r.strategies[id].verdict === 'loses'; }).map(function (id) { return e(r.strategies[id].name); });
@@ -753,6 +841,19 @@ var LabData = {
         watchlist: Config.symbols('watchlist'), intraday: IntraHistory.targets().map(function (it) { return it.key; }).filter(function (s) { return s !== IntraHistory.NIFTY; }),
       },
     };
+  },
+
+  /**
+   * Every trade of the latest Backtest Baseline for the app's explorer: bt-trades.json, made once from the run's data
+   * files when the run is older than this file (about 25,000 short rows).
+   */
+  trades: function () {
+    var sum = Backtest.summary();
+    if (!sum || !sum.runId) return { none: true };
+    var f = null;
+    try { f = DataFile.read('bt-trades.json'); } catch (e) { f = null; }
+    if (f && f.runId === sum.runId) return f;
+    return Backtest.tradesFile(sum.runId, Backtest.allTrades(sum.runId).all);
   },
 
   /** Daily history for some stocks, with the market context (regime, relative strength) on each day. */

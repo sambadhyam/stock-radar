@@ -6,7 +6,7 @@
  * This file holds no keys. Keys are saved privately with  Stock Radar → 2. Set up keys.
  */
 
-var SR_VERSION = '0.6.7';
+var SR_VERSION = '0.6.8';
 var IST = 'Asia/Kolkata';
 
 /* =============================== Settings =============================== */
@@ -42,6 +42,7 @@ var CONFIG_DEFAULTS = [
   ['graduationMinPF', 1.3, 'Profit factor needed for Live-ready'],
   ['graduationMaxDrawdownPct', 15, 'Largest paper drawdown allowed for Live-ready, in percent'],
   ['graduationWindowTrades', 60, 'A strategy is judged on its latest this many closed paper trades (all of them until it has this many)'],
+  ['graduationMinT', 2, 'How clearly a strategy\'s whole paper record must beat luck before it can become Live-ready: its average result divided by its standard error (at 2, a strategy with no edge gets through about 1 time in 40). 0 switches this check off'],
   ['exitCheckDays', 20, 'Trading days after an exit warning at which it is judged (right if the price fell)'],
   ['shadowTracking', true, 'Also paper-track, silently, the signals blocked only by the market filters (regime, your intraday switches, the day\'s direction), to test those filters'],
   ['useInstrumentMaster', false, 'Use Angel One\'s big instrument file for stock tokens (slow; symbol search is used when FALSE)'],
@@ -49,6 +50,7 @@ var CONFIG_DEFAULTS = [
   ['maxTelegramAlertsPerRun', 5, 'Most alert messages sent from one scan; the rest are listed in one extra message'],
   ['maxTelegramAlertsPerDay', 40, 'Most alert messages sent in one day; everything is still logged in the Alerts sheet'],
   ['alertsOnlyTested', true, 'Telegram alerts only from strategies that did not lose money after charges in the Backtest Baseline; the others keep paper-trading silently (app → Alerts) until their own paper record makes them Live-ready'],
+  ['mediumHighScoreOnly', true, 'Medium-term alerts go to Telegram only with a signal score of at least medium.minScore (70); lower ones stay paper-only in the app. On 2015–2026 NSE prices the higher scores did better in every period'],
   ['historyDays', 660, 'Calendar days of daily candles loaded per stock (about 450 trading days)'],
   ['heartbeatMinutes', 5, 'How often the engine records a market snapshot during the session'],
   ['backtestUniverse', 'NIFTY200', 'Stocks the backtester tests the daily strategies on (NIFTY50, NIFTY200 or NIFTY500)'],

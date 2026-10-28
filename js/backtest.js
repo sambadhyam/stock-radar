@@ -17,6 +17,17 @@ export async function loadOverview(force = false) {
 }
 export function cachedOverview() { return overview; }
 
+/** Every trade of the baseline run (about 25,000 short rows), kept on this phone once loaded. */
+export async function loadTrades(runId) {
+  const key = runId + '|trades';
+  const kept = await idb.get(key);
+  if (kept && kept.rows) return kept;
+  const data = await api.btTrades();
+  if (!data || !data.rows) throw new Error('The engine has no backtest trades yet.');
+  if (data.runId === runId) await idb.set(key, data);
+  return data;
+}
+
 async function fetchParts(kind, runId, symbols, chunk, onProgress) {
   const prefix = runId + '|' + kind.charAt(0) + '|', out = { series: {}, rs: {}, market: await idb.get(prefix + 'market') };
   const need = [];

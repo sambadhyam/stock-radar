@@ -6,6 +6,7 @@ import { equityChart } from '../charts.js';
 import { getData, refresh } from '../data.js';
 import { api, isConnected } from '../api.js';
 import { loadOverview, cachedOverview, runBacktest, downloadEstimateMb } from '../backtest.js';
+import { openExplorer } from './explore.js';
 
 const GROUPS = [['SWING', 'swing'], ['MEDIUM', 'medium'], ['INTRADAY', 'intraday']];
 const COMMON_DAILY = ['minRROther', 'minTradedValueCr'];
@@ -89,6 +90,11 @@ function baselineSection(data, ov, live) {
       body.push(h('h3', { class: 'lab-group' }, t('hz.' + key)), h('ul', { class: 'list' }, ids.map((id) => baselineRow(id, result.strategies[id], result))));
     }
     body.push(h('p', { class: 'note faint' }, t('backtest.verdictKey')));
+    if (live) {
+      body.push(h('div', { style: { marginTop: '14px' } },
+        h('button', { type: 'button', class: 'btn btn-ghost btn-block', onclick: () => openExplorer(result) }, t('explore.open')),
+        h('p', { class: 'note faint', style: { marginTop: '6px' } }, t('explore.openSub'))));
+    }
     if (result.filter && result.filter.length) body.push(filterCheck(result.filter));
     if (live && info.state !== 'running') body.push(startButton(info, true));
   }

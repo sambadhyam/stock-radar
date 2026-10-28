@@ -187,10 +187,14 @@ export function coreTests({ test, eq, ok, root }) {
     eq(wide.entryLow, 99.5, 'a range already clear of the stop is kept');
   });
 
-  test('core: confidence leans on the paper record as it grows, up to half at 30 trades', () => {
-    eq(C.confidence(70, null), 70);
-    eq(C.confidence(70, { trades: 30, winRatePct: 60, profitFactor: 1.5 }), Math.round(70 * 0.5 + (60 * 0.6 + 40) * 0.5));
-    ok(C.confidence(70, { trades: 6, winRatePct: 20, profitFactor: 0.5 }) < 70, 'a poor record lowers it');
+  test('core: the signal score is the strategy\'s rule score, whatever its paper record (the number the backtest checks)', () => {
+    const k = S.daily['base-breakout']();
+    for (const track of [null, { trades: 30, winRatePct: 10, profitFactor: 0.2 }, { trades: 30, winRatePct: 90, profitFactor: 5 }]) {
+      const r = C.scanDaily('TEST', k, { regime: bull, strategies: ['base-breakout'], tracks: track ? { 'base-breakout': track } : {} });
+      eq(r.signals.length, 1);
+      eq(r.signals[0].confidence, r.signals[0].ruleScore, 'record ' + JSON.stringify(track));
+    }
+    eq(C.confidence, undefined, 'no blended score any more');
   });
 
   test('core: a signal blocked only by the market filters comes back as a shadow signal', () => {
@@ -337,6 +341,38 @@ export function coreTests({ test, eq, ok, root }) {
     eq(C.graduate({ ...good, maxDrawdownPct: 22 }, rules).status, 'PAPER', 'drawdown limit');
     eq(C.graduate({ ...good, avgAlphaPct: -0.1 }, rules).status, 'PAPER', 'must beat Nifty');
     eq(C.graduate({ ...good, profitFactor: null, losses: 0, wins: 32 }, rules).status, 'LIVE_READY', 'no losses at all');
+  });
+
+  test('core: Live-ready also needs a whole record that luck cannot easily explain, and no losing backtest', () => {
+    const rules = { minTrades: 30, minPF: 1.3, maxDrawdownPct: 15, minT: 2 };
+    const good = { trades: 32, wins: 20, losses: 12, winRatePct: 62.5, expectancyPct: 0.8, profitFactor: 1.9, maxDrawdownPct: 6, avgAlphaPct: 0.4, sdPct: 1.5, tStat: 3.0 };
+    eq(C.graduate(good, rules).status, 'LIVE_READY');
+    const noisy = { ...good, sdPct: 4, tStat: 1.1 };
+    const g = C.graduate(noisy, rules);
+    eq(g.status, 'PAPER');
+    ok(/could still be luck \(at this average, about 68 more trades would show it\)/.test(g.reason), g.reason); // (2 × 4 / 0.8)² = 100, so 68 more
+    eq(C.graduate(noisy, rules, { ...good, trades: 150, tStat: 2.5 }).status, 'LIVE_READY', 'the whole record decides the luck test');
+    eq(C.graduate(good, rules, { ...good, trades: 150, tStat: 1.2 }).status, 'PAPER', 'a good latest window is not enough on its own');
+    const bt = C.graduate(good, { ...rules, btVerdict: 'loses' });
+    eq(bt.status, 'PAPER'); ok(/Backtest Baseline says it loses money after charges/.test(bt.reason), bt.reason);
+    eq(C.graduate(good, { ...rules, btVerdict: 'thin' }).status, 'LIVE_READY', 'a thin but positive backtest does not block');
+    eq(C.graduate({ ...good, expectancyPct: -0.3 }, { ...rules, btVerdict: 'loses' }).status, 'REJECTED', 'rejecting is unchanged');
+    // metrics() gives the spread and the t-value: [1, −0.5, 2, 0.5] has mean 0.75, sd 1.041, t 1.44.
+    const m = C.metrics([1, -0.5, 2, 0.5].map((x, i) => ({ netPct: x, exitT: i + 1 })));
+    eq(m.sdPct, 1.041); eq(m.tStat, 1.44);
+    eq(C.metrics([{ netPct: 1, exitT: 1 }]).tStat, null, 'one trade has no spread');
+    // A strategy with no edge (wins +0.9%, losses −0.6%, about 0.1% charges) on 30 trades: how often it would look
+    // Live-ready, with and without the luck test.
+    let x = 7; const rnd = () => ((x = (x * 1664525 + 1013904223) >>> 0) / 4294967296);
+    let pass = 0, passLuck = 0; const N = 3000;
+    for (let i = 0; i < N; i++) {
+      const tr = Array.from({ length: 30 }, (_, j) => { const v = (rnd() < 0.4 ? 0.9 : -0.6) - 0.1; return { netPct: v, exitT: j + 1, alphaPct: v }; });
+      const mm = C.metrics(tr);
+      if (C.graduate(mm, { minTrades: 30, minPF: 1.3, maxDrawdownPct: 15 }).status === 'LIVE_READY') pass++;
+      if (C.graduate(mm, rules).status === 'LIVE_READY') passLuck++;
+    }
+    ok(pass / N > 0.05, 'without the luck test, about 1 in 10 pass: ' + pass / N);
+    ok(passLuck / N < 0.03, 'with it, under 3 in 100: ' + passLuck / N);
   });
 
   test('core: position size and Zerodha charges', () => {

@@ -2,7 +2,7 @@
 // App code (HTML, JS, CSS) is network-first so updates show up straight away, with the cached copy
 // used when offline or when the network takes longer than 3 seconds. Fonts and icons are cache-first.
 // Engine API calls go to script.google.com (another origin) and are never touched here.
-const VERSION = 'sr-0.6.9';
+const VERSION = 'sr-0.7.0';
 const ASSETS = [
   './',
   'index.html',
@@ -34,6 +34,7 @@ const ASSETS = [
   'js/screens/portfolio.js',
   'js/screens/fundamentals.js',
   'js/screens/review.js',
+  'js/screens/explore.js',
   'js/backtest.js',
   'js/bt-worker.js',
   'js/idb.js',

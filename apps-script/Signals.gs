@@ -688,11 +688,23 @@ var AlertBook = {
   /**
    * True when this strategy's alerts stay off Telegram because it lost money after charges in the Backtest Baseline
    * (switch alertsOnlyTested, on by default). A strategy made Live-ready by its own paper record, or given a status by
-   * hand in the Strategies sheet, still sends. A signal score never decides this: in tests it did not predict results.
+   * hand in the Strategies sheet, still sends. The signal score does not decide this (medium-term alerts have their own
+   * score floor below).
    */
   quietByBacktest: function (id, st) {
     if (Config.get('alertsOnlyTested') === false || (st && (st.status === 'LIVE_READY' || st.overridden))) return false;
     return Backtest.verdictOf(id) === 'loses';
+  },
+
+  /**
+   * A medium-term buy whose signal score is under medium.minScore stays paper-only while mediumHighScoreOnly is on.
+   * On 2015–2026 NSE prices, medium-term signals scoring 70 and up did better in every period and for each strategy
+   * (PLAN §3.20). Intraday and swing scores did not, so they have no floor (RSI(2) has its own, rsi2.minScore).
+   */
+  belowMediumScore: function (sig, P) {
+    if (sig.horizon !== 'MEDIUM' || sig.direction === 'EXIT' || Config.get('mediumHighScoreOnly') === false) return false;
+    var min = Number(P && P['medium.minScore']);
+    return min > 0 && Number(sig.ruleScore) < min;
   },
 
   /** Drop daily-strategy signals that repeat an alert still inside its cooldown. */
@@ -722,7 +734,7 @@ var AlertBook = {
   publish: function (signals, info) {
     if (!signals.length) return { logged: 0, sent: 0 };
     this.ensureHeaders();
-    var book = StrategyBook.load(), nowMs = info.nowMs, regime = Market.saved();
+    var book = StrategyBook.load(), nowMs = info.nowMs, regime = Market.saved(), P = Scans.params();
     var cap = Number(Config.get('realCapital')), risk = Number(Config.get('riskPct')), maxPer = Number(Config.get('maxPerStockPct'));
     var perRun = Math.max(0, Number(Config.get('maxTelegramAlertsPerRun')) || 0), perDay = Math.max(0, Number(Config.get('maxTelegramAlertsPerDay')) || 0);
     var dayYmd = MarketCal.ymd(new Date(nowMs)), counter = null;
@@ -751,6 +763,7 @@ var AlertBook = {
       else if (!tgOn) why = 'Telegram off';
       else if (st.status === 'REJECTED') why = 'strategy rejected (kept as paper only)';
       else if (sig.direction !== 'EXIT' && AlertBook.quietByBacktest(sig.strategy, st)) why = 'lost money after charges in the backtest (kept as paper only)';
+      else if (AlertBook.belowMediumScore(sig, P)) why = 'signal score ' + sig.ruleScore + ' is below ' + P['medium.minScore'] + ' for medium-term alerts (kept as paper only)';
       else if (st.status === 'PAPER' && !paperOk) why = 'paper alerts off';
       else if (sent >= perRun || sentToday >= perDay) why = 'over the message limit';
       if (!why) {

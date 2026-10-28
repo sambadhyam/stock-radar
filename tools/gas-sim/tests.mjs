@@ -1641,6 +1641,59 @@ test('alerts: a strategy that lost money in the backtest stays off Telegram but 
   eq(byHand.row.telegram, 'sent', 'a status set by hand wins');
 });
 
+test('alerts: medium-term alerts scoring under 70 stay paper-only; the switch sends them again', () => {
+  const { G, sim, w } = marketWorld();
+  const mk = (sym, score, horizon = 'MEDIUM', strategy = 'near-high') => ({ symbol: sym, strategy, strategyName: 'Near 52-week high', horizon, direction: 'BUY', entry: 100, entryLow: 99, entryHigh: 100, stop: 93, target1: 114, target2: null,
+    rr: 2, riskPct: 7, ruleScore: score, confidence: score, reasons: ['Test reason'], barTime: Date.now(), tradedValueCr: 50 });
+  G.MarketCal._now = at('2026-10-26T16:20:00+05:30');
+  const before = w.telegram.length;
+  G.AlertBook.publish([mk('BIG001', 65), mk('BIG002', 74), mk('BIG003', 55, 'SWING', 'macd')], { nowMs: G.MarketCal._now, source: 'Test' });
+  const rows = alertsRows(sim), by = (s) => rows.find((a) => a.symbol === s);
+  eq(by('BIG001').telegram, 'not sent: signal score 65 is below 70 for medium-term alerts (kept as paper only)');
+  eq(by('BIG001').track, 'main', 'still a paper trade');
+  eq(by('BIG002').telegram, 'sent'); eq(by('BIG003').telegram, 'sent', 'swing has no floor');
+  ok(!w.telegram.slice(before).some((t) => /BIG001/.test(t)), 'not on Telegram');
+  const token = sim.state.props.get('APP_TOKEN');
+  eq(post(G, { a: 'bundle', t: token }).data.settings.mediumHighScoreOnly, true, 'on by default in the app');
+  eq(post(G, { a: 'settings', t: token, settings: { mediumHighScoreOnly: false } }).ok, true);
+  G.Config._cache = null;
+  G.AlertBook.publish([mk('BIG004', 65)], { nowMs: G.MarketCal._now + 60000, source: 'Test' });
+  eq(alertsRows(sim).find((a) => a.symbol === 'BIG004').telegram, 'sent', 'switched off: sent');
+});
+
+
+test('graduation: a record luck could explain stays Paper, and so does a strategy the Backtest Baseline says loses', () => {
+  const { G, sim, w } = marketWorld();
+  G.AlertBook.ensureHeaders();
+  // Twelve wins of 3% and eighteen losses of 1.5% on 30 days: +0.3% a trade and a profit factor of 1.33, but the
+  // spread is so wide that luck explains it easily (about 0.7 standard errors above zero).
+  G.Store.append('Alerts', Array.from({ length: 30 }, (_, i) => closedRow(i, i % 5 < 2 ? 3 : -1.5, i)));
+  // A steady record for VWAP reclaim, which the Backtest Baseline says loses money after charges.
+  G.Store.append('Alerts', Array.from({ length: 30 }, (_, i) => closedRow(100 + i, i % 3 === 0 ? -0.5 : 1.2, i, 'vwap')));
+  sim.state.props.set('BT_SUMMARY', JSON.stringify({ runId: 't', at: Date.now(), universe: 'Nifty 200', daily: {}, intraday: {}, s: { vwap: [505, 60, 32, -0.1, 0.61, 5.2, -0.1, null, 'loses'] } }));
+  G.Backtest._sum = null;
+  G.MarketCal._now = at('2026-10-31T10:30:00+05:30');
+  const before = w.telegram.length;
+  G.weeklyReport();
+  const msgs = w.telegram.slice(before).join('\n');
+  ok(!/LIVE-READY/.test(msgs), 'neither promoted: ' + msgs);
+  const rows = sheetRows(sim, 'Strategies');
+  ok(/could still be luck \(at this average, about \d+ more trades would show it\)/.test(rows.find((r) => r.id === 'orb').statusReason), rows.find((r) => r.id === 'orb').statusReason);
+  ok(/Backtest Baseline says it loses money after charges/.test(rows.find((r) => r.id === 'vwap').statusReason), rows.find((r) => r.id === 'vwap').statusReason);
+  // The app shows the same reason.
+  const b = post(G, { a: 'bundle', t: sim.state.props.get('APP_TOKEN') }).data;
+  ok(/could still be luck/.test(b.strategies.find((x) => x.id === 'orb').verdict), b.strategies.find((x) => x.id === 'orb').verdict);
+  // With the luck test switched off (graduationMinT 0) the noisy record would pass.
+  const sh = sim.ss.getSheetByName('Config'), cfg = sh.dump(), r = cfg.findIndex((x) => x[0] === 'graduationMinT');
+  ok(r > 0, 'graduationMinT in the Config sheet');
+  sh.getRange(r + 1, 2).setValues([[0]]); G.Config._cache = null;
+  G.weeklyReport();
+  G.StrategyBook._map = null;
+  eq(G.StrategyBook.load().orb.status, 'LIVE_READY', 'without the luck test it would have passed');
+  eq(G.StrategyBook.load().vwap.status, 'PAPER', 'the backtest still holds VWAP back');
+});
+
+
 test('web app: older alerts come in pages for the date filters, newest first', () => {
   const { G, sim } = marketWorld();
   const token = sim.state.props.get('APP_TOKEN');
@@ -1740,6 +1793,16 @@ test('backtest: the menu loads long history, tests every strategy and sends the 
   ok(Object.keys(res.strategies).length === 11, 'seven daily and four intraday strategies');
   ok(Array.isArray(res.scoreCheck) && res.scoreCheck.length >= 1 && res.scoreCheck.every((c) => c.trades > 0 && /below 60|60–69|70 and up/.test(c.band)), 'signal score check: ' + JSON.stringify(res.scoreCheck));
   ok(/Signal score check/.test(msg), 'score check in the report');
+  ok(Array.isArray(res.stockCheck) && res.stockCheck.length >= 1 && res.stockCheck.every((c) => ['better', 'same', 'worse', 'few'].includes(c.verdict) && c.luck >= 0), 'stock check: ' + JSON.stringify(res.stockCheck));
+  ok(/<b>Stock check<\/b>/.test(msg) && /stock picks from the first half averaged/.test(msg) && /luck alone about/.test(msg), 'stock check in the report');
+  ok(!res.filter.some((f) => f.filter === 'regime'), 'the regime pause is split: ' + JSON.stringify(res.filter.map((f) => f.horizon + ':' + f.filter)));
+  if (res.filter.some((f) => /^regime-/.test(f.filter))) ok(/the downtrend pause|the high-volatility pause/.test(msg), 'split filter lines in the report');
+  // Every trade in one compact file for the app's explorer, and the same through the web app.
+  const tf = JSON.parse(sim.state.drive.items.find((f) => f.name === 'bt-trades.json').content);
+  eq(tf.runId, j.runId); eq(tf.fields.length, 14); ok(tf.rows.every((x) => x.length === 14), 'rows of 14');
+  const shadows = Object.values(res.strategies).reduce((a, s) => a + (s.shadow.trades || 0), 0);
+  eq(tf.rows.length, Object.values(res.strategies).reduce((a, s) => a + s.metrics.trades, 0) + shadows, 'every trade, taken and held back');
+  ok(tf.rows.every((x) => typeof tf.syms[x[0]] === 'string' && typeof tf.strategies[x[1]] === 'string' && tf.regimes[x[3]] && tf.outcomes[x[6]]), 'names and codes resolve');
   const total = Object.values(res.strategies).reduce((a, s) => a + s.metrics.trades, 0);
   ok(total > 100, 'trades in total: ' + total);
   ok(res.strategies.macd.curve.length > 10 && res.strategies.macd.curve[0].v === 100000, 'monthly equity curve from the paper capital');
@@ -1762,6 +1825,15 @@ test('backtest: the menu loads long history, tests every strategy and sends the 
   // The lab's data: the result, stock lists, and history with the market context.
   const ov = post(G, { a: 'backtest', t: token }).data;
   ok(ov.result.runId === j.runId && ov.lists.universe.length === 50 && ov.lists.intraday.includes('TCS'), JSON.stringify(ov.lists).slice(0, 200));
+  const bt = post(G, { a: 'btTrades', t: token }).data;
+  eq(bt.runId, j.runId); eq(bt.rows.length, tf.rows.length);
+  // A baseline made before this file existed: the web app makes it once from the run's data files.
+  sim.state.drive.items = sim.state.drive.items.filter((f) => f.name !== 'bt-trades.json');
+  G.History._ids = null;
+  const rebuilt = post(G, { a: 'btTrades', t: token });
+  ok(rebuilt.ok, 'rebuilt: ' + rebuilt.error);
+  eq(rebuilt.data.rows.length, tf.rows.length, 'same trades');
+  ok(sim.state.drive.items.some((f) => f.name === 'bt-trades.json'), 'saved for next time');
   const dd = post(G, { a: 'btData', t: token, kind: 'daily', symbols: ['RELIANCE', 'TCS', '../BAD'], market: true }).data;
   ok(dd.series.RELIANCE.d.length > 950 && dd.series.RELIANCE.c.length === dd.series.RELIANCE.d.length, 'daily columns');
   ok(dd.market.days.length === dd.market.regime.length && dd.rs.RELIANCE.length === dd.market.days.length, 'market context');
@@ -1774,7 +1846,7 @@ test('backtest: the menu loads long history, tests every strategy and sends the 
     const daily = { series: {}, rs: {} };
     for (let i = 0; i < syms.length; i += 10) { const part = post(G, { a: 'btData', t: token, kind: 'daily', symbols: syms.slice(i, i + 10), market: i === 0 }).data; Object.assign(daily.series, part.series); Object.assign(daily.rs, part.rs); if (part.market) daily.market = part.market; }
     const intraday = post(G, { a: 'btData', t: token, kind: 'intraday', symbols: ['TCS'].concat(ov.lists.intraday.filter((s) => s !== 'TCS').slice(0, 7)), market: true }).data;
-    fs.writeFileSync(process.env.LAB_OUT, JSON.stringify({ bundle: b, overview: ov, daily, intraday, token, url: 'https://script.google.com/macros/s/AKfycbFAKEdeploymentIDforTests1234567890/exec' }));
+    fs.writeFileSync(process.env.LAB_OUT, JSON.stringify({ bundle: b, overview: ov, daily, intraday, trades: bt, message: msg, token, url: 'https://script.google.com/macros/s/AKfycbFAKEdeploymentIDforTests1234567890/exec' }));
   }
   // Running it again is a refresh, not a new baseline.
   const again = G.Backtest.start('menu');

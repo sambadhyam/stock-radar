@@ -16,7 +16,7 @@
 var SRCore = (function () {
   'use strict';
 
-  var VERSION = '0.6.2';
+  var VERSION = '0.6.3';
   var OPEN_MIN = 555;   // 09:15 IST in minutes after midnight
   var CLOSE_MIN = 930;  // 15:30 IST
   var ALL_REGIMES = ['BULL', 'NEUTRAL', 'BEAR', 'HIGH_VOL'];
@@ -196,6 +196,7 @@ var SRCore = (function () {
     ['medium.maxRiskPct', 15, 'Largest medium-term stop distance accepted, percent of price'],
     ['medium.cooldownDays', 30, 'Calendar days before the same medium-term strategy may alert the same stock again'],
     ['medium.rsTopPct', 20, 'Relative strength leaders must rank in the top this many percent of the universe'],
+    ['medium.minScore', 70, 'Medium-term: lowest signal score sent to Telegram (lower ones stay paper-only, while the Settings switch is on). On 2015–2026 NSE prices, scores of 70 and up did better in every period and for each medium-term strategy'],
     ['trend.minAboveLowPct', 30, 'Trend template: price at least this many percent above the 52-week low'],
     ['trend.maxBelowHighPct', 25, 'Trend template: price at most this many percent below the 52-week high'],
     ['trend.minRsPct', 70, 'Trend template: relative-strength percentile needed'],
@@ -836,26 +837,15 @@ var SRCore = (function () {
     if (sig.rr < minRR) return { rejected: 'reward-to-risk ' + sig.rr + ' is below ' + minRR };
     if (!num(o.tradedValueCr)) return { rejected: 'no volume history for the liquidity check' };
     if (o.tradedValueCr < P.minTradedValueCr) return { rejected: 'average traded value ₹' + round(o.tradedValueCr, 1) + ' crore is below ₹' + P.minTradedValueCr + ' crore' };
-    sig.confidence = confidence(sig.ruleScore, o.track);
+    // The signal score is the strategy's own rule score: the number the backtest checks against outcomes
+    // (PLAN §3.20). The strategy's paper record is shown on its own, never mixed into it.
+    sig.confidence = sig.ruleScore;
     if (blocked) {
       if (regimeState === 'UNKNOWN') return { rejected: regimeWhy };
       sig.blocked = blocked;
       return { rejected: regimeOk ? blocked : regimeWhy, shadow: sig };
     }
     return { signal: sig };
-  }
-
-  /**
-   * Confidence 0–100: the rule strength, blended with the strategy's own paper record once it has one.
-   * track: {trades, winRatePct, profitFactor} or null. The record counts for up to half, reached at 30 trades.
-   */
-  function confidence(ruleScore, track) {
-    var rule = clamp(ruleScore, 0, 100);
-    if (!track || !(track.trades > 0)) return Math.round(rule);
-    var pf = num(track.profitFactor) ? track.profitFactor : 1;
-    var record = clamp((num(track.winRatePct) ? track.winRatePct : 50) * 0.6 + clamp((pf - 0.5) * 40, 0, 40), 0, 100);
-    var w = Math.min(track.trades, 30) / 30 * 0.5;
-    return Math.round(rule * (1 - w) + record * w);
   }
 
   /* ============================ Scans ============================ */
@@ -1096,12 +1086,12 @@ var SRCore = (function () {
     var cap = opts.capital > 0 ? opts.capital : 100000;
     var list = (trades || []).filter(function (x) { return num(x.netPct); }).slice().sort(function (a, b) { return (a.exitT || 0) - (b.exitT || 0); });
     var money = list.length > 0 && list.every(function (x) { return num(x.netPnl); });
-    var n = list.length, wins = 0, losses = 0, flats = 0, sumW = 0, sumL = 0, gp = 0, gl = 0, sum = 0;
+    var n = list.length, wins = 0, losses = 0, flats = 0, sumW = 0, sumL = 0, gp = 0, gl = 0, sum = 0, sumSq = 0;
     var hold = 0, nHold = 0, alpha = 0, nAlpha = 0, eq = cap, peak = cap, maxDD = 0, total = 0, seen = {}, days = 0;
     list.forEach(function (x) {
       var dt = num(x.dayT) ? x.dayT : x.exitT;
       if (num(dt) && !seen[istDay(dt)]) { seen[istDay(dt)] = true; days++; }
-      sum += x.netPct;
+      sum += x.netPct; sumSq += x.netPct * x.netPct;
       if (x.netPct > 0) { wins++; sumW += x.netPct; } else if (x.netPct < 0) { losses++; sumL += x.netPct; } else flats++;
       var v = money ? x.netPnl : x.netPct;
       if (v > 0) gp += v; else gl -= v;
@@ -1112,6 +1102,7 @@ var SRCore = (function () {
       if (num(x.holdDays)) { hold += x.holdDays; nHold++; }
       if (num(x.alphaPct)) { alpha += x.alphaPct; nAlpha++; }
     });
+    var sd = n > 1 ? Math.sqrt(Math.max(0, (sumSq - sum * sum / n) / (n - 1))) : 0;
     return {
       trades: n, days: days, wins: wins, losses: losses, flats: flats,
       winRatePct: n ? round(wins / n * 100, 1) : null,
@@ -1124,18 +1115,26 @@ var SRCore = (function () {
       avgAlphaPct: nAlpha ? round(alpha / nAlpha, 2) : null,
       totalNetPnl: money ? round(total) : null,
       returnPct: n ? round((eq / cap - 1) * 100, 2) : null,
+      sdPct: n > 1 ? round(sd, 3) : null,
+      // How many standard errors the average is above zero: about 2 or more is hard to get by luck.
+      tStat: n > 1 && sd > 0 ? round(sum / n / (sd / Math.sqrt(n)), 2) : null,
     };
   }
 
   /**
    * Live-ready, Rejected or still Paper, from a strategy's metrics.
-   * rules: {minTrades, minDays, minPF, maxDrawdownPct}
+   * m: metrics of the trades it is judged on (the latest ones); whole: metrics of its whole paper record (for the
+   * luck test; m when left out).
+   * rules: {minTrades, minDays, minPF, maxDrawdownPct, minT, btVerdict}
    *   Both decisions need at least minTrades closed trades, spread over at least minDays different trading days.
    *   LIVE_READY: average net result above zero after charges, profit factor at least minPF, drawdown within
-   *               the limit, and beating Nifty 50 over the same holding periods (average alpha above zero).
+   *               the limit, beating Nifty 50 over the same holding periods (average alpha above zero), a whole
+   *               record that luck is unlikely to explain (tStat at least minT), and no 'loses' verdict from the
+   *               Backtest Baseline (btVerdict). A strategy with no edge passes the other checks on 30 trades about
+   *               one time in ten, and the check repeats every week.
    *   REJECTED:   an average net result below zero.
    */
-  function graduate(m, rules) {
+  function graduate(m, rules, whole) {
     var need = rules.minTrades, needDays = rules.minDays || 0, days = m && num(m.days) ? m.days : 0;
     if (!m || !(m.trades >= need)) {
       return { status: 'PAPER', reason: 'Needs more data: ' + (m ? m.trades : 0) + ' of ' + need + ' closed paper trades' + (needDays ? ', on ' + days + ' of ' + needDays + ' different days' : '') + '.' };
@@ -1150,6 +1149,12 @@ var SRCore = (function () {
     if (!pfOk) fails.push('profit factor ' + m.profitFactor + ' is below ' + rules.minPF);
     if (!(m.maxDrawdownPct <= rules.maxDrawdownPct)) fails.push('drawdown ' + m.maxDrawdownPct + '% is above ' + rules.maxDrawdownPct + '%');
     if (!(m.avgAlphaPct > 0)) fails.push('does not beat Nifty 50 over the same holding periods');
+    var w = whole || m, minT = num(rules.minT) ? rules.minT : 0;
+    if (minT > 0 && m.expectancyPct > 0 && !(w.tStat >= minT)) {
+      var more = w.expectancyPct > 0 && w.sdPct > 0 ? Math.max(1, Math.ceil(Math.pow(minT * w.sdPct / w.expectancyPct, 2)) - w.trades) : 0;
+      fails.push('the result could still be luck' + (more ? ' (at this average, about ' + more + ' more trades would show it)' : ''));
+    }
+    if (rules.btVerdict === 'loses') fails.push('the Backtest Baseline says it loses money after charges');
     if (fails.length) return { status: 'PAPER', reason: 'Not yet: ' + fails.join('; ') + '.' };
     return {
       status: 'LIVE_READY',
@@ -1408,7 +1413,6 @@ var SRCore = (function () {
     scanIntraday: scanIntraday,
     dayDirection: dayDirection,
     finalize: finalize,
-    confidence: confidence,
     positionSize: positionSize,
     charges: charges,
     simulateTrade: simulateTrade,

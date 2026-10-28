@@ -1,7 +1,7 @@
 // state.js — user settings, kept on this phone. When the engine is connected, its settings win and are saved there too.
 import { store } from './util.js';
 
-export const APP_VERSION = '0.6.9';
+export const APP_VERSION = '0.7.0';
 /** The oldest engine (SR_VERSION in Data.gs) whose settings and data this app fully understands. */
 export const ENGINE_NEEDED = '0.6.0';
 
@@ -26,6 +26,7 @@ export const DEFAULTS = Object.freeze({
   emailDigest: true,
   paperAlerts: true,
   alertsOnlyTested: true,   // Telegram alerts only from strategies that did not lose money in the backtest
+  mediumHighScoreOnly: true, // medium-term Telegram alerts only with a signal score of 70 or more
   intradayFollowNifty: true,       // buys only while Nifty 50 is above today's open, shorts only below
   intradayBlockBuysInBear: false,  // no intraday buys on Bear-regime days
   intradayBlockShortsInBull: false,// no intraday shorts on Bull-regime days

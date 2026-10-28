@@ -119,6 +119,7 @@ var AppApi = {
     if (action === 'backtest') return LabData.overview();
     if (action === 'btData') return req.kind === 'intraday' ? LabData.intraday(req.symbols, !!req.market) : LabData.daily(req.symbols, !!req.market);
     if (action === 'btStart') { Backtest.start('app'); Backtest.schedule(30000); return Backtest.info(); }
+    if (action === 'btTrades') return LabData.trades();
     if (action === 'holdings') return this.holdings(req);
     if (action === 'fundamentals') return this.lock(function () { return FundImport.save(req.rows, String(req.source || 'App import')); });
     if (action === 'summary') return AiSummary.summarise(String(req.symbol || ''));
@@ -150,7 +151,7 @@ var AppApi = {
 
     var strategies = SRCore.STRATEGIES.map(function (st) {
       var mine = trades.filter(function (x) { return x.strategy === st.id; }).sort(function (a, b) { return a.exitT - b.exitT; });
-      var m = SRCore.metrics(Review.window(mine), { capital: cap });
+      var j = Review.judge(st.id, trades, rules, cap), m = j.m;
       var b = book[st.id] || {};
       var outcomes = rows.filter(function (r) { return r.strategy === st.id && (r.track || 'main') === 'main' && r.status === 'CLOSED' && ['TARGET_HIT', 'STOP_HIT', 'EXPIRED'].indexOf(r.outcome) >= 0; })
         .sort(function (a, b2) { return self.ms(a.closedAt) - self.ms(b2.closedAt); })
@@ -159,7 +160,7 @@ var AppApi = {
         id: st.id, name: st.name, horizon: self.lower(st.horizon), status: self.statusKey(b.status), enabled: b.enabled !== false,
         override: b.override || '', trades: mine.length, days: m.days, outcomes: outcomes, win: m.winRatePct, avg: m.expectancyPct, pf: m.profitFactor,
         vsNifty: m.avgAlphaPct, paperDd: m.maxDrawdownPct === null ? null : -m.maxDrawdownPct, backtest: self.backtestOf(st.id, bt),
-        verdict: SRCore.graduate(m, rules).reason, quiet: AlertBook.quietByBacktest(st.id, b),
+        verdict: j.g.reason, quiet: AlertBook.quietByBacktest(st.id, b),
       };
     });
     var statusOf = {};
@@ -340,7 +341,7 @@ var AppApi = {
   },
 
   /** On/off settings the app may change (all TRUE/FALSE in the Config sheet). */
-  SWITCHES: ['telegram', 'emailDigest', 'paperAlerts', 'alertsOnlyTested', 'intradayFollowNifty', 'intradayBlockBuysInBear', 'intradayBlockShortsInBull', 'intradayOneAlertPerStock', 'aiSummaries', 'sessionReview'],
+  SWITCHES: ['telegram', 'emailDigest', 'paperAlerts', 'alertsOnlyTested', 'mediumHighScoreOnly', 'intradayFollowNifty', 'intradayBlockBuysInBear', 'intradayBlockShortsInBull', 'intradayOneAlertPerStock', 'aiSummaries', 'sessionReview'],
   /** Numbers the app may change, with their allowed range. */
   NUMBERS: { realCapital: [1000, 1e10], paperCapital: [1000, 1e10], riskPct: [0.1, 5], maxPerStockPct: [1, 100], portfolioMaxStockPct: [5, 100], portfolioMaxSectorPct: [10, 100], backtestYears: [3, 15], intradayHistoryDays: [20, 120], backtestMinutesPerDay: [10, 40] },
   WHOLE: ['backtestYears', 'intradayHistoryDays', 'backtestMinutesPerDay'],

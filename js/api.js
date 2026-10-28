@@ -22,10 +22,10 @@ export function validToken(t) {
 }
 
 /** Call one engine action. Throws ApiError with a plain-English message. */
-export async function call(action, payload = {}, conn = getSettings()) {
+export async function call(action, payload = {}, conn = getSettings(), timeoutMs = TIMEOUT_MS) {
   if (!validUrl(conn.backendUrl) || !validToken(conn.token)) throw new ApiError('The app is not connected to the engine yet.', 'setup');
   const ctrl = typeof AbortController === 'function' ? new AbortController() : null;
-  const timer = ctrl ? setTimeout(() => ctrl.abort(), TIMEOUT_MS) : null;
+  const timer = ctrl ? setTimeout(() => ctrl.abort(), timeoutMs) : null;
   let res;
   try {
     res = await fetch(conn.backendUrl.trim(), {
@@ -59,6 +59,8 @@ export const api = {
   backtest: () => call('backtest'),
   btData: (kind, symbols, market) => call('btData', { kind, symbols, market: !!market }),
   btStart: () => call('btStart'),
+  // The first time after a new baseline the engine gathers the trades from its data files, which can take a minute.
+  btTrades: () => call('btTrades', {}, getSettings(), 120000),
   holdings: (payload) => call('holdings', payload),
   fundamentals: (rows, source) => call('fundamentals', { rows, source }),
   summary: (symbol) => call('summary', { symbol }),
