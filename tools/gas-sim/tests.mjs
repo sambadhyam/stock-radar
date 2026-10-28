@@ -1523,6 +1523,42 @@ test('web app: swing and medium setups held back in a Bear market reach the app 
   }
 });
 
+test('alerts: a strategy that lost money in the backtest stays off Telegram but keeps paper-trading; the switch and a hand-set status bring it back', () => {
+  const tcs = SC.intraday.orb();
+  const run = (setup) => {
+    const env = marketWorld({ intra: { [TOKENS.TCS]: tcs } });
+    const { G, sim } = env;
+    G.MarketCal._now = at('2026-10-25T21:00:00+05:30');
+    G.loadHistory();
+    G.Schedule.install();
+    // A baseline in which the opening-range breakout lost money after charges.
+    sim.state.props.set('BT_SUMMARY', JSON.stringify({ runId: 't', at: Date.now(), universe: 'Nifty 200', daily: { from: '2016-10-24', to: '2026-10-23', symbols: 200 },
+      intraday: { from: '2026-07-30', to: '2026-10-23', sessions: 60, symbols: 55 }, s: { orb: [120, 40, 31, -0.08, 0.81, 9.5, -0.1, null, 'loses'], vwap: [90, 35, 44, 0.06, 1.4, 4, 0.1, null, 'good'] } }));
+    G.Backtest._sum = null;
+    if (setup) setup(env);
+    const day = '2026-10-26';
+    for (const t of ['08:50', '09:41', '09:46']) tickAtDay(G, day, t);
+    return { ...env, row: alertsRows(sim)[0] };
+  };
+  const quiet = run();
+  eq(quiet.row.strategy, 'orb'); eq(quiet.row.track, 'main', 'still a paper trade');
+  eq(quiet.row.telegram, 'not sent: lost money after charges in the backtest (kept as paper only)');
+  ok(!quiet.w.telegram.some((t) => /BUY TCS/.test(t)), 'nothing on Telegram');
+  const token = quiet.sim.state.props.get('APP_TOKEN');
+  const resp = post(quiet.G, { a: 'bundle', t: token });
+  ok(resp.ok, 'bundle: ' + resp.error);
+  const b = resp.data;
+  eq(b.strategies.find((s) => s.id === 'orb').quiet, true); eq(b.strategies.find((s) => s.id === 'vwap').quiet, false);
+  eq(b.settings.alertsOnlyTested, true);
+  const off = run(({ G, sim }) => { eq(post(G, { a: 'settings', t: sim.state.props.get('APP_TOKEN'), settings: { alertsOnlyTested: false } }).ok, true); G.Config._cache = null; });
+  eq(off.row.telegram, 'sent', 'switched off in the app: sent as before');
+  const byHand = run(({ G, sim }) => {
+    const sh = sim.ss.getSheetByName('Strategies'), d = sh.dump(), r = d.findIndex((x) => x[0] === 'orb'), c = d[0].indexOf('override');
+    sh.getRange(r + 1, c + 1, 1, 1).setValues([['PAPER']]); G.StrategyBook._map = null;
+  });
+  eq(byHand.row.telegram, 'sent', 'a status set by hand wins');
+});
+
 test('web app: older alerts come in pages for the date filters, newest first', () => {
   const { G, sim } = marketWorld();
   const token = sim.state.props.get('APP_TOKEN');
@@ -1614,11 +1650,14 @@ test('backtest: the menu loads long history, tests every strategy and sends the 
   const msg = w.telegram.slice(before).join('\n');
   ok(/🧪 <b>Backtest Baseline<\/b>/.test(msg) && /Swing<\/b> · \d+ Nifty 50 stocks/.test(msg) && /Intraday<\/b> · \d+ stocks · last \d+ sessions/.test(msg), msg);
   ok(/Opening-range breakout: \d+ trades/.test(msg) && /Read with care/.test(msg) && /Backtest lab/.test(msg), msg);
+  ok(/🔕 <b>Paper only from now on<\/b>/.test(msg) || /📣 Every strategy kept its Telegram alerts/.test(msg), 'which strategies keep their Telegram alerts');
   const res = JSON.parse(sim.state.drive.items.find((f) => f.name === 'bt-result.json').content);
   const orb = res.strategies.orb;
   ok(orb.metrics.trades >= 15 && orb.metrics.winRatePct > 50, 'ORB trades every session on TCS: ' + JSON.stringify(orb.metrics));
   ok(orb.sample.every((x) => x[0] === 'TCS' && x[2] === 'B'), 'buys on TCS with Nifty rising');
   ok(Object.keys(res.strategies).length === 11, 'seven daily and four intraday strategies');
+  ok(Array.isArray(res.scoreCheck) && res.scoreCheck.length >= 1 && res.scoreCheck.every((c) => c.trades > 0 && /below 60|60–69|70 and up/.test(c.band)), 'signal score check: ' + JSON.stringify(res.scoreCheck));
+  ok(/Signal score check/.test(msg), 'score check in the report');
   const total = Object.values(res.strategies).reduce((a, s) => a + s.metrics.trades, 0);
   ok(total > 100, 'trades in total: ' + total);
   ok(res.strategies.macd.curve.length > 10 && res.strategies.macd.curve[0].v === 100000, 'monthly equity curve from the paper capital');

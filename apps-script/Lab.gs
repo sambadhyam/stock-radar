@@ -277,6 +277,12 @@ var Backtest = {
   job: function () { try { return JSON.parse(Secrets.props().getProperty(this.JOB) || 'null'); } catch (e) { return null; } },
   saveJob: function (j) { Secrets.props().setProperty(this.JOB, JSON.stringify(j)); },
   summary: function () { try { return JSON.parse(Secrets.props().getProperty(this.SUMMARY) || 'null'); } catch (e) { return null; } },
+  /** The latest baseline's verdict for one strategy ('good', 'thin', 'loses', 'few'), or '' before there is one. */
+  verdictOf: function (id) {
+    if (!this._sum) this._sum = this.summary() || {};
+    var x = this._sum.s && this._sum.s[id];
+    return x && x[8] ? String(x[8]) : '';
+  },
   running: function () { var j = this.job(); return !!(j && j.stage !== 'done' && j.stage !== 'failed'); },
 
   /**
@@ -475,12 +481,14 @@ var Backtest = {
   pack: function (t) {
     var m = function (x) { return typeof x === 'number' ? Math.round(x / 60000) : 0; };
     return [t.symbol, t.strategy, t.track === 'shadow' ? 1 : 0, this.REG[t.regime] || 'U', m(t.dayT), m(t.fillT), m(t.exitT), this.OUT[t.outcome] || 'E',
-      t.netPct, t.netPnl === null ? null : Math.round(t.netPnl * 100) / 100, t.holdDays, t.alphaPct, t.direction === 'SHORT' ? 1 : 0, t.blocked ? Review.blockKind(t.blocked) : ''];
+      t.netPct, t.netPnl === null ? null : Math.round(t.netPnl * 100) / 100, t.holdDays, t.alphaPct, t.direction === 'SHORT' ? 1 : 0, t.blocked ? Review.blockKind(t.blocked) : '',
+      typeof t.score === 'number' ? Math.round(t.score) : null];
   },
   unpack: function (a) {
     return {
       symbol: a[0], strategy: a[1], track: a[2] ? 'shadow' : 'main', regime: this.REG_BACK[a[3]] || 'UNKNOWN', dayT: a[4] * 60000, fillT: a[5] * 60000, exitT: a[6] * 60000,
       outcome: this.OUT_BACK[a[7]] || 'EXPIRED', netPct: a[8], netPnl: a[9], holdDays: a[10], alphaPct: a[11], direction: a[12] ? 'SHORT' : 'BUY', blockedBy: a[13] || '',
+      score: typeof a[14] === 'number' ? a[14] : null,
     };
   },
 
@@ -522,7 +530,9 @@ var Backtest = {
       compact[st.id] = [m.trades, m.days, m.winRatePct, m.expectancyPct, m.profitFactor, m.maxDrawdownPct, m.avgAlphaPct, s.cagrPct, verdict];
     });
     result.filter = this.filterCheck(all, cap);
+    result.scoreCheck = this.scoreCheck(all, cap);
     DataFile.write('bt-result.json', result);
+    this._sum = null;
     var sum = { runId: j.runId, at: result.at, universe: result.universe, daily: result.daily, intraday: { from: result.intraday.from, to: result.intraday.to, sessions: result.intraday.sessions, symbols: result.intraday.symbols }, s: compact };
     Secrets.props().setProperty(this.SUMMARY, JSON.stringify(sum));
     this.writeSheet(result);
@@ -548,6 +558,26 @@ var Backtest = {
     if (!m || m.trades < 30) return 'few';
     if (!(m.expectancyPct > 0)) return 'loses';
     return m.profitFactor === null || m.profitFactor >= rules.minPF ? 'good' : 'thin';
+  },
+
+  /**
+   * Does a higher signal score do better? The trades taken, per horizon, in three score bands (below 60, 60–69,
+   * 70 and up): count, win rate, target hits and average result after charges. On real NSE prices the bands came
+   * out about the same, which is why the engine never filters alerts by score; this keeps checking on your data.
+   */
+  scoreCheck: function (all, cap) {
+    var out = [], bands = [[0, 60, 'below 60'], [60, 70, '60–69'], [70, 101, '70 and up']];
+    ['INTRADAY', 'SWING', 'MEDIUM'].forEach(function (h) {
+      var mine = all.filter(function (x) { return x.track === 'main' && typeof x.score === 'number' && SRCore.strategy(x.strategy) && SRCore.strategy(x.strategy).horizon === h; });
+      if (mine.length < 30) return;
+      bands.forEach(function (b) {
+        var list = mine.filter(function (x) { return x.score >= b[0] && x.score < b[1]; });
+        if (!list.length) return;
+        var m = SRCore.metrics(list, { capital: cap }), hits = list.filter(function (x) { return x.outcome === 'TARGET_HIT'; }).length;
+        out.push({ horizon: h, band: b[2], trades: m.trades, winRatePct: m.winRatePct, targetPct: Math.round(hits / list.length * 1000) / 10, avgPct: m.expectancyPct });
+      });
+    });
+    return out;
   },
 
   /** Signals the market filters held back, against those taken, per horizon and filter. */
@@ -610,6 +640,16 @@ var Backtest = {
       r.filter.forEach(function (f) {
         L.push(hz[f.horizon] + ', ' + f.by + ': blocked ' + Fmt.num(f.blocked, 0) + ' averaged ' + Fmt.pct(f.blockedAvg) + (f.taken ? ' vs ' + Fmt.pct(f.takenAvg) + ' for the ' + Fmt.num(f.taken, 0) + ' taken' : ''));
       });
+    }
+    if (r.scoreCheck && r.scoreCheck.length) {
+      L.push('', '<b>Signal score check</b> (does a higher score do better?)');
+      var hzn = { INTRADAY: 'Intraday', SWING: 'Swing', MEDIUM: 'Medium' };
+      r.scoreCheck.forEach(function (c) { L.push(hzn[c.horizon] + ', score ' + c.band + ': ' + Fmt.num(c.trades, 0) + ' trades · win ' + c.winRatePct + '% · target hit ' + c.targetPct + '% · avg ' + Fmt.pct(c.avgPct)); });
+    }
+    if (Config.get('alertsOnlyTested') !== false) {
+      var quiet = Object.keys(r.strategies).filter(function (id) { return r.strategies[id].verdict === 'loses'; }).map(function (id) { return e(r.strategies[id].name); });
+      L.push('', quiet.length ? '🔕 <b>Paper only from now on</b> (they lost money after charges here, so no Telegram alerts until their own paper record makes them Live-ready): ' + quiet.join(', ') + '. Switch: app → Settings → Alerts.'
+        : '📣 Every strategy kept its Telegram alerts: none lost money after charges here.');
     }
     L.push('', 'Read with care: today\'s ' + e(r.universe) + ' list is used for the whole period, so stocks that dropped out (often the losers) are missing, which flatters the results. Each trade is sized like the paper account, as if it were the only position. Intraday uses 5-minute bars, a little coarser than the live 1-minute check. Past results do not promise future ones.');
     L.push('Details: app → More → Backtest lab.');

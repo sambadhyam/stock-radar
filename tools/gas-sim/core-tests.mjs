@@ -68,6 +68,14 @@ export function coreTests({ test, eq, ok, root }) {
     });
   }
 
+  test('core: an RSI(2) dip needs a signal score of at least rsi2.minScore (70 by default)', () => {
+    eq(C.params()['rsi2.minScore'], 70);
+    const k = S.daily.rsi2();
+    const r = C.scanDaily('T', k, { regime: bull, strategies: ['rsi2'] });
+    eq(r.signals.length, 1); ok(r.signals[0].ruleScore >= 70, 'a deep dip in a strong uptrend: ' + r.signals[0].ruleScore);
+    eq(C.scanDaily('T', k, { regime: bull, strategies: ['rsi2'], params: C.params({ 'rsi2.minScore': 99 }) }).signals.length, 0, 'below the floor: no signal');
+  });
+
   test('core: relative-strength leaders fire only on the day they enter the top 20%', () => {
     const k = S.daily['trend-template']();
     eq(C.scanDaily('T', k, { regime: bull, strategies: ['rs-leaders'], rsPct: 92, rsPrevPct: 70 }).signals.length, 1, 'enters the top 20%');

@@ -397,7 +397,7 @@ export function openAlert(a) {
     return h('div', null, head, chart, statusNote, paperLine,
       h('h3', null, isExit ? t('alert.changed') : t('alert.plan')),
       isExit ? h('p', { class: 'muted', style: { marginBottom: '10px' } }, a.headline) : null,
-      plan, held ? null : sizeBlock,
+      plan, isExit ? null : h('p', { class: 'note faint', style: { marginTop: '6px' } }, t('alert.scoreNote')), held ? null : sizeBlock,
       h('h3', null, t('alert.why')),
       h('ul', { class: 'bullets' }, a.why.map((w) => h('li', null, w))),
       record, held ? null : actions); // a held-back setup was never a signal: no size, no order to copy

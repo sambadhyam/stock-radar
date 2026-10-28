@@ -6,7 +6,7 @@
  * This file holds no keys. Keys are saved privately with  Stock Radar → 2. Set up keys.
  */
 
-var SR_VERSION = '0.6.5';
+var SR_VERSION = '0.6.6';
 var IST = 'Asia/Kolkata';
 
 /* =============================== Settings =============================== */
@@ -48,6 +48,7 @@ var CONFIG_DEFAULTS = [
   ['intradayMaxSymbols', 60, 'Most stocks the intraday engine checks every 5 minutes'],
   ['maxTelegramAlertsPerRun', 5, 'Most alert messages sent from one scan; the rest are listed in one extra message'],
   ['maxTelegramAlertsPerDay', 40, 'Most alert messages sent in one day; everything is still logged in the Alerts sheet'],
+  ['alertsOnlyTested', true, 'Telegram alerts only from strategies that did not lose money after charges in the Backtest Baseline; the others keep paper-trading silently (app → Alerts) until their own paper record makes them Live-ready'],
   ['historyDays', 660, 'Calendar days of daily candles loaded per stock (about 450 trading days)'],
   ['heartbeatMinutes', 5, 'How often the engine records a market snapshot during the session'],
   ['backtestUniverse', 'NIFTY200', 'Stocks the backtester tests the daily strategies on (NIFTY50, NIFTY200 or NIFTY500)'],

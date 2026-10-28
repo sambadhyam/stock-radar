@@ -144,6 +144,7 @@ export function openStrategy(st) {
     trackStrip(st.outcomes),
     stripLegend(),
     st.trades && st.trades < 30 ? h('p', { class: 'note' }, t('results.early')) : null,
+    st.quiet ? h('p', { class: 'note', style: { marginTop: '8px' } }, '🔕 ' + t('results.quiet')) : null,
     h('h3', null, t('results.backtest')),
     compareTable(st),
     h('p', { class: 'note' }, st.backtest && st.backtest.from ? t('results.backtestPeriod', { from: fmt.monthYear(Date.parse(st.backtest.from + 'T12:00:00+05:30')), to: fmt.monthYear(Date.parse(st.backtest.to + 'T12:00:00+05:30')) }) : t('results.backtestNote')),

@@ -159,7 +159,7 @@ var AppApi = {
         id: st.id, name: st.name, horizon: self.lower(st.horizon), status: self.statusKey(b.status), enabled: b.enabled !== false,
         override: b.override || '', trades: mine.length, days: m.days, outcomes: outcomes, win: m.winRatePct, avg: m.expectancyPct, pf: m.profitFactor,
         vsNifty: m.avgAlphaPct, paperDd: m.maxDrawdownPct === null ? null : -m.maxDrawdownPct, backtest: self.backtestOf(st.id, bt),
-        verdict: SRCore.graduate(m, rules).reason,
+        verdict: SRCore.graduate(m, rules).reason, quiet: AlertBook.quietByBacktest(st.id, b),
       };
     });
     var statusOf = {};
@@ -340,7 +340,7 @@ var AppApi = {
   },
 
   /** On/off settings the app may change (all TRUE/FALSE in the Config sheet). */
-  SWITCHES: ['telegram', 'emailDigest', 'paperAlerts', 'intradayFollowNifty', 'intradayBlockBuysInBear', 'intradayBlockShortsInBull', 'intradayOneAlertPerStock', 'aiSummaries', 'sessionReview'],
+  SWITCHES: ['telegram', 'emailDigest', 'paperAlerts', 'alertsOnlyTested', 'intradayFollowNifty', 'intradayBlockBuysInBear', 'intradayBlockShortsInBull', 'intradayOneAlertPerStock', 'aiSummaries', 'sessionReview'],
   /** Numbers the app may change, with their allowed range. */
   NUMBERS: { realCapital: [1000, 1e10], paperCapital: [1000, 1e10], riskPct: [0.1, 5], maxPerStockPct: [1, 100], portfolioMaxStockPct: [5, 100], portfolioMaxSectorPct: [10, 100], backtestYears: [3, 15], intradayHistoryDays: [20, 120], backtestMinutesPerDay: [10, 40] },
   WHOLE: ['backtestYears', 'intradayHistoryDays', 'backtestMinutesPerDay'],

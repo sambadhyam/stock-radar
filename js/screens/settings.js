@@ -12,7 +12,7 @@ const SYMBOL_RE = /^[A-Z0-9&-]{1,20}$/;
 /** Each saved setting's label, to say which ones the engine did not keep. */
 const LABELS = {
   realCapital: 'settings.realCap', paperCapital: 'settings.paperCap', riskPct: 'settings.risk', maxPerStockPct: 'settings.maxStock',
-  watchlist: 'settings.watchlist', telegram: 'settings.telegram', emailDigest: 'settings.email', paperAlerts: 'settings.paperAlerts',
+  watchlist: 'settings.watchlist', telegram: 'settings.telegram', emailDigest: 'settings.email', paperAlerts: 'settings.paperAlerts', alertsOnlyTested: 'settings.onlyTested',
   intradayFollowNifty: 'settings.followNifty', intradayBlockBuysInBear: 'settings.blockBuysBear', intradayBlockShortsInBull: 'settings.blockShortsBull',
   intradayOneAlertPerStock: 'settings.onePerStock', portfolioMaxStockPct: 'settings.pfStock', portfolioMaxSectorPct: 'settings.pfSector',
   backtestYears: 'settings.btYears', intradayHistoryDays: 'settings.btDays', backtestMinutesPerDay: 'settings.btMins', aiSummaries: 'settings.ai',
@@ -102,6 +102,7 @@ export function render({ data, rerender }) {
   const tg = switchRow('f-tg', t('settings.telegram'), t('settings.telegramSub'), s.telegram);
   const em = switchRow('f-em', t('settings.email'), t('settings.emailSub'), s.emailDigest);
   const pa = switchRow('f-pa', t('settings.paperAlerts'), t('settings.paperAlertsSub'), s.paperAlerts);
+  const qt = switchRow('f-qt', t('settings.onlyTested'), t('settings.onlyTestedSub'), s.alertsOnlyTested !== false);
   const rv = switchRow('f-rv', t('settings.sessionReview'), t('settings.sessionReviewSub'), s.sessionReview !== false);
 
   // Intraday rules (engine Config keys of the same names).
@@ -113,7 +114,7 @@ export function render({ data, rerender }) {
   ].map(([key, id, label]) => ({ key, ...switchRow(id, t(label), t(label + 'Sub'), !!s[key]) }));
 
   const stratRows = data.strategies.map((st) => {
-    const r = switchRow('f-st-' + st.id, st.name, t('hz.' + st.horizon), !off.has(st.id));
+    const r = switchRow('f-st-' + st.id, st.name, t('hz.' + st.horizon) + (st.quiet ? ' · ' + t('settings.stQuiet') : ''), !off.has(st.id));
     r.input.addEventListener('change', () => { if (r.input.checked) off.delete(st.id); else off.add(st.id); });
     return r.el;
   });
@@ -165,7 +166,7 @@ export function render({ data, rerender }) {
       realCapital: Number(real.input.value), paperCapital: Number(paper.input.value),
       riskPct: Number(risk.input.value), maxPerStockPct: Number(maxStock.input.value),
       watchlist: watch, telegram: tg.input.checked, emailDigest: em.input.checked, paperAlerts: pa.input.checked,
-      sessionReview: rv.input.checked,
+      alertsOnlyTested: qt.input.checked, sessionReview: rv.input.checked,
     };
     INTRA.forEach((r) => { patch[r.key] = r.input.checked; });
     patch.portfolioMaxStockPct = Number(pfStock.input.value); patch.portfolioMaxSectorPct = Number(pfSector.input.value);
@@ -199,7 +200,7 @@ export function render({ data, rerender }) {
       tags,
       h('div', { class: 'add-row' }, addInput, h('button', { type: 'button', class: 'btn btn-ghost', onclick: addSymbol }, icon(ICONS.plus), t('settings.add')))),
     h('section', { class: 'form-sec' },
-      h('h2', null, t('settings.alerts')), tg.el, em.el, pa.el, rv.el,
+      h('h2', null, t('settings.alerts')), tg.el, em.el, pa.el, qt.el, rv.el,
       tgBtn,
       connected ? null : h('p', { class: 'note faint', style: { textAlign: 'center', marginTop: '6px', fontSize: '12px' } }, t('settings.needConnect'))),
     h('section', { class: 'form-sec' },

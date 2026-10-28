@@ -338,7 +338,8 @@ var StrategyBook = {
       var trades = Number(r.trades) || 0;
       map[s.id] = {
         id: s.id, name: s.name, horizon: s.horizon, enabled: (r.enabled === undefined || r.enabled === '' ? true : bool(r.enabled)) && off.indexOf(s.id) < 0,
-        status: status, track: trades > 0 ? { trades: trades, winRatePct: Number(r.winRatePct) || 0, profitFactor: Number(r.profitFactor) || 0 } : null,
+        status: status, overridden: self.STATUSES.indexOf(override) >= 0,
+        track: trades > 0 ? { trades: trades, winRatePct: Number(r.winRatePct) || 0, profitFactor: Number(r.profitFactor) || 0 } : null,
       };
     });
     this._map = map;
@@ -675,6 +676,16 @@ var AlertBook = {
     });
   },
 
+  /**
+   * True when this strategy's alerts stay off Telegram because it lost money after charges in the Backtest Baseline
+   * (switch alertsOnlyTested, on by default). A strategy made Live-ready by its own paper record, or given a status by
+   * hand in the Strategies sheet, still sends. A signal score never decides this: in tests it did not predict results.
+   */
+  quietByBacktest: function (id, st) {
+    if (Config.get('alertsOnlyTested') === false || (st && (st.status === 'LIVE_READY' || st.overridden))) return false;
+    return Backtest.verdictOf(id) === 'loses';
+  },
+
   /** Drop daily-strategy signals that repeat an alert still inside its cooldown. */
   withoutRepeats: function (signals, P) {
     if (!signals.length) return [];
@@ -730,6 +741,7 @@ var AlertBook = {
       if (isShadow) why = (sig.blocked || 'blocked by the ' + SRCore.regimeName(regime ? regime.state : 'UNKNOWN') + ' regime') + ', tracked silently';
       else if (!tgOn) why = 'Telegram off';
       else if (st.status === 'REJECTED') why = 'strategy rejected (kept as paper only)';
+      else if (sig.direction !== 'EXIT' && AlertBook.quietByBacktest(sig.strategy, st)) why = 'lost money after charges in the backtest (kept as paper only)';
       else if (st.status === 'PAPER' && !paperOk) why = 'paper alerts off';
       else if (sent >= perRun || sentToday >= perDay) why = 'over the message limit';
       if (!why) {
@@ -775,7 +787,7 @@ var AlertBook = {
         (short ? ' (sell first, intraday MIS only)' : sig.horizon === 'INTRADAY' ? '' : ' (from the next session, only while the price is in this range)'));
       L.push('🛑 <b>Stop-loss:</b> ' + Fmt.money(sig.stop) + ' (' + move(sig.stop) + ')');
       L.push('🎯 <b>Target:</b> ' + Fmt.money(sig.target1) + ' (' + move(sig.target1) + ')' + (sig.target2 ? ' · then ' + Fmt.money(sig.target2) + ' (' + move(sig.target2) + ')' : ''));
-      L.push('⚖️ <b>Reward:risk</b> ' + sig.rr.toFixed(1) + ' · 📊 <b>Confidence</b> ' + sig.confidence + '/100');
+      L.push('⚖️ <b>Reward:risk</b> ' + sig.rr.toFixed(1) + ' · 📊 <b>Signal score</b> ' + sig.confidence + '/100');
       if (size.qty > 0) L.push('📦 <b>Size:</b> ' + size.qty + ' shares (' + Fmt.money(size.value, 0) + (size.capped ? ', the most your per-stock limit allows' : '') + ') · loss at the stop ' + Fmt.money(size.riskAmount, 0));
       else L.push('📦 <b>Size:</b> the stop is too far for your risk setting, so no position fits.');
       L.push('⏰ <b>Valid:</b> ' + e(win.text) + (sig.horizon === 'INTRADAY' ? ', square off by then' : ''));

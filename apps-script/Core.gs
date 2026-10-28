@@ -16,7 +16,7 @@
 var SRCore = (function () {
   'use strict';
 
-  var VERSION = '0.6.1';
+  var VERSION = '0.6.2';
   var OPEN_MIN = 555;   // 09:15 IST in minutes after midnight
   var CLOSE_MIN = 930;  // 15:30 IST
   var ALL_REGIMES = ['BULL', 'NEUTRAL', 'BEAR', 'HIGH_VOL'];
@@ -191,6 +191,7 @@ var SRCore = (function () {
     ['breakout.volMult', 1.5, 'Breakout day volume needed, times the 20-day average'],
     ['pullback.touchPct', 1, 'How close the day\'s low must come to the 20-day EMA, percent'],
     ['rsi2.max', 10, 'RSI(2) must be below this for a dip buy'],
+    ['rsi2.minScore', 70, 'RSI(2) dip: lowest signal score taken. Deeper dips in stronger uptrends score higher; in tests on 2014–2026 NSE prices only those (70 and up) made money after charges'],
     ['medium.holdDays', 120, 'Trading days a medium-term signal stays valid'],
     ['medium.maxRiskPct', 15, 'Largest medium-term stop distance accepted, percent of price'],
     ['medium.cooldownDays', 30, 'Calendar days before the same medium-term strategy may alert the same stock again'],
@@ -432,10 +433,12 @@ var SRCore = (function () {
     var c = x.c[i];
     if (!(c > s200 && r2 < P['rsi2.max'])) return null;
     var high10 = maxOf(x.h, i - 10, i - 1), stop = c - 1.5 * a;
+    var score = 50 + clamp((P['rsi2.max'] - r2) * 2, 0, 20) + clamp(((c / s200) - 1) * 100, 0, 15);
+    if (score < P['rsi2.minScore']) return null; // a shallow dip or a weak trend: these lost money in tests
     return {
       direction: 'BUY', entry: c, entryLow: c - 0.3 * a, entryHigh: c + 0.1 * a,
       stop: stop, target1: high10, target2: high10 + a,
-      score: 50 + clamp((P['rsi2.max'] - r2) * 2, 0, 20) + clamp(((c / s200) - 1) * 100, 0, 15),
+      score: score,
       reasons: [
         'Price is above its 200-day average (' + inr(s200) + '), so the long-term trend is up.',
         'RSI(2) fell to ' + r2.toFixed(1) + ', a short-term oversold dip.',
@@ -1232,7 +1235,7 @@ var SRCore = (function () {
       symbol: symbol, strategy: st.id, horizon: st.horizon, direction: sig.direction, track: track, regime: regimeName0,
       dayT: dayT, fillT: s.fillT, exitT: s.exitT, outcome: s.outcome, entry: sig.entry, stop: sig.stop, target: sig.target1,
       fill: s.fillPrice, exit: s.exitPrice, qty: r.qty, netPct: r.netPct, netPnl: r.netPnl, holdDays: r.holdDays, alphaPct: alpha,
-      blocked: sig.blocked || '',
+      blocked: sig.blocked || '', score: sig.ruleScore,
     };
   }
 

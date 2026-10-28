@@ -21,6 +21,7 @@ Read `PLAN.md` first: it holds the architecture, verified API facts, quota budge
 - Bump `VERSION` in `sw.js` on every release and list any new file in its `ASSETS`.
 - Prices use Indian grouping and IST (`fmt` in `js/util.js`). Use the real minus sign for negatives.
 - The app never places orders. Alerts, paper trades and analysis only.
+- Never present a number as a confidence or probability unless it has been checked against outcomes (PLAN §3.20); filters that cut alerts must be backed by results, and blocked signals stay paper-tracked so the filter can be judged.
 - Build children with `h()`; when refilling an element whose children may be null, use `fill(el, …)` / `append(el, …)` from util.js (the DOM's own `replaceChildren` prints "null").
 - Imported holdings and fundamentals are read on the phone and go only to the owner's sheet (or the phone's storage while not connected), never into the repo, logs or sample data.
 
