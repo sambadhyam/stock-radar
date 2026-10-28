@@ -99,6 +99,7 @@ function doPost(e) {
 
 var AppApi = {
   MAX_ALERTS: 150,
+  MAX_HELD: 40,
 
   authorised: function (token) {
     var want = Secrets.get('APP_TOKEN');
@@ -165,6 +166,15 @@ var AppApi = {
     strategies.forEach(function (st) { statusOf[st.id] = st.status; });
 
     var alerts = main.slice(-this.MAX_ALERTS).map(function (r) { return self.alertOut(r, statusOf); });
+    // Swing and medium signals the market filters held back in the last 30 days (paper only, never sent), newest first.
+    var since = now.getTime() - 30 * 86400000;
+    var held = rows.filter(function (r) {
+      return r.track === 'shadow' && (r.horizon === 'SWING' || r.horizon === 'MEDIUM') && r.direction !== 'EXIT' && self.ms(r.createdAt) >= since;
+    }).slice(-this.MAX_HELD).reverse().map(function (r) {
+      var a = self.alertOut(r, statusOf);
+      a.held = String(r.telegram || '').replace(/^not sent: /, '').replace(/, tracked silently$/, '');
+      return a;
+    });
 
     return {
       isDemo: false, version: SR_VERSION, updatedAt: Date.now(), session: session, asOf: asOf,
@@ -172,7 +182,7 @@ var AppApi = {
       paper: this.paper(rows, trades, cap, today), scan: this.scan(), fundamentals: this.fundamentals(),
       reports: this.reports(), paperStart: Secrets.props().getProperty('PAPER_START') || '',
       readinessSent: (Secrets.props().getProperty('READINESS_SENT') || '').split(',').filter(Boolean).map(Number),
-      settings: PendingSettings.overlay(this.settings(book)), rules: rules, review: SessionReview.latest(), alertsTotal: main.length,
+      settings: PendingSettings.overlay(this.settings(book)), rules: rules, review: SessionReview.latest(), alertsTotal: main.length, held: held,
       backtest: Backtest.info(), portfolio: Portfolio.view(), ai: AiSummary.status(), params: Scans.params(),
       labSettings: {
         rates: Review.rates(), sizing: Review.sizing(), lastEntryMinute: Config.minutesOf('noEntriesAfter'), expiryMinute: Config.minutesOf('intradayExpiry'),
@@ -262,7 +272,7 @@ var AppApi = {
   engine: function () {
     var snap = null, jobs = Jobs.status();
     try { snap = JSON.parse(Secrets.props().getProperty('SNAPSHOT') || 'null'); } catch (e) { snap = null; }
-    var names = { preMarket: 'Pre-market check', intradayScan: 'Intraday scan', historyUpdate: 'Price history', evaluateIntraday: 'Judging intraday alerts', evaluateDaily: 'Judging other alerts', endOfDayScan: 'End-of-day scan', endOfDay: 'Closing summary', weekly: 'Weekly report' };
+    var names = { preMarket: 'Pre-market check', intradayScan: 'Intraday scan', evaluateIntraday: 'Judging intraday alerts', historyUpdate: 'Price history', evaluateDaily: 'Judging other alerts', endOfDayScan: 'End-of-day scan', endOfDay: 'Closing summary', sessionReview: 'Session review', endOfDayLate: 'End of day, finished late', weekly: 'Weekly report' };
     var list = Object.keys(names).filter(function (k) { return jobs[k]; }).map(function (k) {
       var j = jobs[k];
       return { name: names[k], ok: !!j.ok, at: Date.parse(j.at) || null, error: j.ok ? '' : Secrets.mask(j.lastError || '').slice(0, 160) };

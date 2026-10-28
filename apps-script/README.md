@@ -290,6 +290,26 @@ That's all. The schedule keeps running, and the backtest starts by itself after 
 3. In the app, Settings shows "Connected to the engine (version 0.6.4)" at the bottom once the new version is live.
 4. To see today's review straight away: app → Results → Reports → **Make the latest review now**.
 
+## Update 0.6.5: the evening work always finishes, the downtrend pause shown in the app, a clearer session review
+
+- **Fix: the evening work no longer runs out of time.** On 26 and 27 Oct the price-history step took about two hours, because a stock that Angel One refused for a moment made the next run fetch hundreds of stocks again. On 27 Oct it was still running at 18:00, so judging, the scan, the closing summary and the review never happened. Now each run asks only for the stocks still missing, intraday alerts are judged first, and if the work is not done by 18:00 you get a "⏳ running late" message and it carries on in the background until it is (the summary always comes, by 22:30 at the latest). The summary says when the evening work ran. The backtest waits until it is done.
+- **The downtrend pause is shown in the app.** Swing and medium-term buys go out only in a Bull or Neutral market. In a downtrend (now) the Swing and Medium tabs and the stock pages say so, with the reasons and what brings buys back, and list the setups that were held back, with entry, stop-loss and target, marked "Held back · paper only".
+- **Session review:** every alert is accounted for (paper trades, never reached the entry, too pricey for the ₹10,000 per-stock limit, still open), the result before charges is shown, and each market filter is compared with the trades taken instead of always saying "the filter helped". The AI write-up follows the same rules.
+- New menu item: **Stock Radar → Finish today's end-of-day work**.
+
+1. Paste seven files (open each link, **Ctrl+A**, **Ctrl+C**; in Apps Script click in the matching file, **Ctrl+A**, **Ctrl+V**), then **Ctrl+S**:
+   [Api.gs](https://raw.githubusercontent.com/sambadhyam/stock-radar/main/apps-script/Api.gs) → `Api`,
+   [Data.gs](https://raw.githubusercontent.com/sambadhyam/stock-radar/main/apps-script/Data.gs) → `Data`,
+   [Engine.gs](https://raw.githubusercontent.com/sambadhyam/stock-radar/main/apps-script/Engine.gs) → `Engine`,
+   [Lab.gs](https://raw.githubusercontent.com/sambadhyam/stock-radar/main/apps-script/Lab.gs) → `Lab`,
+   [Review.gs](https://raw.githubusercontent.com/sambadhyam/stock-radar/main/apps-script/Review.gs) → `Review`,
+   [Setup.gs](https://raw.githubusercontent.com/sambadhyam/stock-radar/main/apps-script/Setup.gs) → `Setup`,
+   [Signals.gs](https://raw.githubusercontent.com/sambadhyam/stock-radar/main/apps-script/Signals.gs) → `Signals`.
+   `Core.gs` and `appsscript.json` are unchanged.
+2. Publish the web app again: **Deploy → Manage deployments → ✏️ → Version: New version → Deploy**.
+3. Reload the sheet (for the new menu item). If today's closing summary has not come and it is after 16:00, run **Stock Radar → Finish today's end-of-day work**.
+4. In the app, Settings shows "Connected to the engine (version 0.6.5)" at the bottom.
+
 ## Backtests
 
 The engine replays history through exactly the rules of the live paper record (same strategy code, fills, exits and Zerodha charges) and sends a **🧪 Backtest Baseline** report to Telegram and email. The numbers also go into the **Backtests** sheet, the **Reports** list and the app (More → Backtest lab, and each strategy card in Results).

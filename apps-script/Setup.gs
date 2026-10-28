@@ -20,6 +20,7 @@ function onOpen() {
     .addSeparator()
     .addItem('Status', 'showStatus')
     .addItem('Update paper results now', 'updatePaperResults')
+    .addItem('Finish today\'s end-of-day work', 'menuFinishEndOfDay')
     .addItem('Connect the app', 'menuConnectApp')
     .addItem('New app token', 'newAppToken')
     .addItem('Send a test Telegram message', 'testTelegram')

@@ -715,9 +715,32 @@ var SessionReview = {
     var byStrategy = Object.keys(strat).map(function (id) { var g = strat[id], st = SRCore.strategy(id); g.id = id; g.name = st ? st.name : id; return g; })
       .sort(function (a, b) { return b.net - a.net; });
     var dirs = this.group(trades, function (r) { return r.direction; });
-    var shadowClosed = closed.filter(function (r) { return !isMain(r) && REVIEW_OUTCOMES.indexOf(r.outcome) >= 0 && R.num(r.netPct); });
-    var kinds = this.group(shadowClosed, function (r) { return R.blockKind(r.telegram); });
-    var filters = Object.keys(kinds).map(function (k) { return { kind: k, n: kinds[k].n, won: kinds[k].won, avgPct: kinds[k].avgPct, net: kinds[k].net }; });
+    // Held-back signals against the trades taken, intraday with intraday and the rest with the rest, in % a trade.
+    var judged = function (r) { return REVIEW_OUTCOMES.indexOf(r.outcome) >= 0 && r.direction !== 'EXIT' && R.num(r.netPct); };
+    var takenAvg = function (intra) {
+      var list = closed.filter(function (r) { return isMain(r) && judged(r) && (r.horizon === 'INTRADAY') === intra; });
+      return list.length ? R.round(list.reduce(function (a, r) { return a + Number(r.netPct); }, 0) / list.length, 2) : null;
+    };
+    var taken = { INTRADAY: takenAvg(true), OTHER: takenAvg(false) };
+    var shadowClosed = closed.filter(function (r) { return !isMain(r) && judged(r); });
+    var kinds = this.group(shadowClosed, function (r) { return R.blockKind(r.telegram) + '|' + (r.horizon === 'INTRADAY' ? 'INTRADAY' : 'OTHER'); });
+    var filters = Object.keys(kinds).map(function (key) {
+      var g = kinds[key], kind = key.split('|')[0], hz = key.split('|')[1];
+      return { kind: kind, intraday: hz === 'INTRADAY', n: g.n, won: g.won, avgPct: g.avgPct, net: g.net, takenAvgPct: taken[hz], verdict: self.verdict(g.n, g.avgPct, taken[hz], hz === 'INTRADAY') };
+    }).sort(function (a, b) { return b.n - a.n; });
+    // What became of every alert made today, so the numbers add up (sent ones, and the ones held back).
+    var fateOf = function (r) {
+      if (r.status !== 'CLOSED') return 'open';
+      if (r.outcome === 'NOT_TRIGGERED') return 'notTriggered';
+      if (r.outcome === 'NO_DATA') return 'noData';
+      if (REVIEW_OUTCOMES.indexOf(r.outcome) < 0) return 'other';
+      return isMain(r) && !(Number(r.paperQty) > 0 && R.num(r.netPnl)) ? 'tooPricey' : 'traded';
+    };
+    var fate = function (list) {
+      var o = { traded: 0, notTriggered: 0, tooPricey: 0, noData: 0, open: 0, other: 0 };
+      list.forEach(function (r) { if (r.direction !== 'EXIT') o[fateOf(r)]++; });
+      return o;
+    };
     var opened = mainNew.filter(function (r) { return r.horizon !== 'INTRADAY' && r.direction !== 'EXIT'; }).slice(0, 15).map(function (r) {
       var st = SRCore.strategy(r.strategy);
       return { symbol: String(r.symbol), horizon: String(r.horizon), strategy: st ? st.name : String(r.strategy), dir: String(r.direction), entryLow: Number(r.entryLow), entryHigh: Number(r.entryHigh), stop: Number(r.stop), target1: Number(r.target1) };
@@ -732,7 +755,9 @@ var SessionReview = {
       alerts: { n: mainNew.length, intraday: hz('INTRADAY'), swing: hz('SWING'), medium: hz('MEDIUM'), long: hz('LONG'),
         buy: count(mainNew, function (r) { return r.direction === 'BUY'; }), short: count(mainNew, function (r) { return r.direction === 'SHORT'; }),
         exit: count(mainNew, function (r) { return r.direction === 'EXIT'; }), blocked: created.length - mainNew.length,
-        pending: count(mainNew, function (r) { return r.status !== 'CLOSED' && r.horizon === 'INTRADAY'; }) },
+        pending: count(mainNew, function (r) { return r.status !== 'CLOSED' && r.horizon === 'INTRADAY'; }),
+        fate: fate(mainNew), heldFate: fate(created.filter(function (r) { return !isMain(r); })),
+        perStock: Math.round(cap * (Review.sizing().maxPer || 100) / 100) },
       paper: { n: trades.length, won: won, lost: lost, flat: trades.length - won - lost, winRatePct: trades.length ? Math.round(won / trades.length * 100) : null,
         net: R.round(net, 0), gross: R.round(gross, 0), charges: R.round(charges, 0), returnPct: cap > 0 ? R.round(net / cap * 100, 2) : null, avgPct: trades.length ? R.round(pctSum / trades.length, 2) : null,
         target: count(trades, function (r) { return r.outcome === 'TARGET_HIT'; }), stop: count(trades, function (r) { return r.outcome === 'STOP_HIT'; }),
@@ -744,6 +769,40 @@ var SessionReview = {
       total: ps ? { net: ps.netPnl, returnPct: ps.returnPct, closed: ps.closed } : null,
       ai: null,
     };
+  },
+
+  /**
+   * Did a filter help today? Its held-back signals against the trades taken (same kind of horizon), in % a trade.
+   * A gap under 0.05 points (intraday) or 0.5 points (longer trades) is too small to mean anything, and so are
+   * fewer than five signals. Returns 'helped', 'cost', 'same' or 'few'.
+   */
+  verdict: function (n, avg, taken, intraday) {
+    if (!(n >= 5) || !Review.num(avg)) return 'few';
+    if (!Review.num(taken)) return avg < 0 ? 'helped' : avg > 0 ? 'cost' : 'same';
+    var gap = avg - taken;
+    return Math.abs(gap) < (intraday ? 0.05 : 0.5) ? 'same' : gap < 0 ? 'helped' : 'cost';
+  },
+
+  /** "49 paper trades, 3 never reached the entry, …" for the alerts made today. held: the held-back ones. */
+  fateText: function (o, perStock, held) {
+    if (!o) return '';
+    var plural = function (n, one, many) { return n + ' ' + (n === 1 ? one : many); };
+    var parts = [];
+    if (o.traded) parts.push(held ? plural(o.traded, 'was judged', 'were judged') : plural(o.traded, 'paper trade', 'paper trades'));
+    if (o.notTriggered) parts.push(o.notTriggered + ' never reached the entry');
+    if (o.tooPricey) parts.push(plural(o.tooPricey, 'was', 'were') + ' too pricey for the ' + Fmt.money(perStock, 0) + ' per-stock limit (counted in % only)');
+    if (o.noData) parts.push(o.noData + ' had no price data');
+    if (o.open) parts.push(o.open + ' still open');
+    if (o.other) parts.push(o.other + ' other');
+    return parts.join(', ');
+  },
+
+  /** A filter's result in words, e.g. "averaged −0.06% a trade against −0.07% for the trades taken: about the same". */
+  filterText: function (g) {
+    var tail = { helped: 'the filter helped', cost: 'the filter cost money today', same: 'about the same, so no verdict yet', few: 'too few to judge' }[g.verdict];
+    var vs = Review.num(g.takenAvgPct) ? ' against ' + Fmt.pct(g.takenAvgPct) + ' for the trades taken' : '';
+    if (!g.verdict) tail = g.avgPct < 0 ? 'the filter helped' : g.avgPct > 0 ? 'they would have made money' : ''; // a review saved before 0.6.5
+    return 'averaged ' + Fmt.pct(g.avgPct) + ' a trade' + vs + (tail ? ': ' + tail : '');
   },
 
   /** n, won, lost, net ₹ and average % per group. */
@@ -766,16 +825,17 @@ var SessionReview = {
     var L = [], p = f.paper, m = function (x) { return Fmt.money(x, 0); };
     L.push('Date: ' + Fmt.day(f.day) + '. Market regime: ' + SRCore.regimeName(f.regime) + '.' + (f.nifty && f.nifty.pct !== null ? ' Nifty 50 closed ' + Fmt.pct(f.nifty.pct) + '.' : ''));
     L.push('Alerts sent today: ' + f.alerts.n + ' (' + f.alerts.intraday + ' intraday, ' + f.alerts.swing + ' swing, ' + f.alerts.medium + ' medium term, ' + f.alerts.long + ' long term; ' + f.alerts.buy + ' buys, ' + f.alerts.short + ' shorts, ' + f.alerts.exit + ' exit checks). ' + f.alerts.blocked + ' more signals were held back by the market filters.');
+    if (f.alerts.fate) L.push('What became of today\'s alerts: ' + this.fateText(f.alerts.fate, f.alerts.perStock) + '.');
     L.push('Paper trades closed today: ' + p.n + '. Won ' + p.won + ', lost ' + p.lost + ', flat ' + p.flat + (p.winRatePct !== null ? '. Win rate ' + p.winRatePct + '%' : '') + '.');
-    L.push('Net result today after charges: ' + m(p.net) + (p.returnPct !== null ? ' (' + Fmt.pct(p.returnPct) + ' of the ' + m(f.capital) + ' paper capital)' : '') + '. Charges ' + m(p.charges) + '. Average per trade ' + (p.avgPct !== null ? Fmt.pct(p.avgPct) : '—') + '.');
+    L.push('Net result today after charges: ' + m(p.net) + (p.returnPct !== null ? ' (' + Fmt.pct(p.returnPct) + ' of the ' + m(f.capital) + ' paper capital)' : '') + '. Result before charges: ' + (p.gross > 0 ? '+' : '') + m(p.gross) + '. Charges ' + m(p.charges) + '. Average per trade after charges ' + (p.avgPct !== null ? Fmt.pct(p.avgPct) : '—') + '.');
     L.push('Targets hit ' + p.target + ', stop-losses hit ' + p.stop + ', expired ' + p.expired + ', never reached the entry ' + p.notTriggered + '.');
     if (f.best) L.push('Best trade: ' + f.best.symbol + ' (' + f.best.strategy + ', ' + f.best.dir.toLowerCase() + ') ' + Fmt.pct(f.best.pct) + ', ' + m(f.best.net) + '.');
     if (f.worst) L.push('Worst trade: ' + f.worst.symbol + ' (' + f.worst.strategy + ', ' + f.worst.dir.toLowerCase() + ') ' + Fmt.pct(f.worst.pct) + ', ' + m(f.worst.net) + '.');
     f.byStrategy.forEach(function (g) { L.push('Strategy ' + g.name + ': ' + g.n + ' trades, ' + g.won + ' won, ' + g.lost + ' lost, net ' + m(g.net) + ', average ' + Fmt.pct(g.avgPct) + '.'); });
     ['BUY', 'SHORT'].forEach(function (d) { var g = f.byDir[d]; if (g) L.push((d === 'BUY' ? 'Buys' : 'Shorts') + ': ' + g.n + ' trades, ' + g.won + ' won, net ' + m(g.net) + ', average ' + Fmt.pct(g.avgPct) + '.'); });
     f.byTime.forEach(function (g) { L.push('Intraday alerts from ' + g.label + ': ' + g.n + ' trades, ' + g.won + ' won, net ' + m(g.net) + '.'); });
-    var names = { regime: 'the market regime filter', switch: 'the Bear/Bull switches', day: 'the day\'s-direction filter' };
-    f.filters.forEach(function (g) { L.push('Signals held back by ' + (names[g.kind] || g.kind) + ' and closed today: ' + g.n + ', they averaged ' + Fmt.pct(g.avgPct) + ' (' + g.won + ' would have won).'); });
+    var names = { regime: 'the market regime filter', switch: 'the Bear/Bull switches', day: 'the day\'s-direction filter' }, self = this;
+    f.filters.forEach(function (g) { L.push('Signals held back by ' + (names[g.kind] || g.kind) + (g.intraday === false ? ' (swing and longer)' : g.intraday ? ' (intraday)' : '') + ' and closed today: ' + g.n + ', ' + g.won + ' would have won; they ' + self.filterText(g) + '.'); });
     if (f.alerts.pending) L.push(f.alerts.pending + ' of today\'s intraday alerts are not judged yet.');
     if (f.open) L.push('Paper trades still open: ' + f.open.n + ', unrealised ' + m(f.open.unrealised) + '.');
     if (f.total) L.push('Since the paper account started: ' + m(f.total.net) + ' (' + Fmt.pct(f.total.returnPct) + ') over ' + f.total.closed + ' closed trades.');
@@ -789,7 +849,8 @@ var SessionReview = {
     var tr = function (n) { return n + ' trade' + (n === 1 ? '' : 's'); };
     L.push('📒 <b>Session review · ' + Fmt.day(f.day) + '</b>');
     if (p.n) {
-      L.push((p.net > 0 ? '📈' : p.net < 0 ? '📉' : '➖') + ' Paper result today: <b>' + signed(p.net) + '</b>' + (p.returnPct !== null ? ' (' + Fmt.pct(p.returnPct) + ' of ' + m(f.capital) + ')' : '') + ', after ' + m(p.charges) + ' charges');
+      L.push((p.net > 0 ? '📈' : p.net < 0 ? '📉' : '➖') + ' Paper result today: <b>' + signed(p.net) + '</b>' + (p.returnPct !== null ? ' (' + Fmt.pct(p.returnPct) + ' of ' + m(f.capital) + ')' : '') + ', after ' + m(p.charges) + ' charges' +
+        (Review.num(p.gross) ? ' (' + signed(p.gross) + ' before them)' : ''));
       L.push('📊 ' + tr(p.n) + ' closed · ✅ ' + p.won + ' won · ❌ ' + p.lost + ' lost' + (p.flat ? ' · ➖ ' + p.flat + ' flat' : '') + (p.winRatePct !== null ? ' · win rate ' + p.winRatePct + '%' : ''));
       L.push('🎯 Targets ' + p.target + ' · 🛑 Stops ' + p.stop + ' · ⏳ Expired ' + p.expired + (p.notTriggered ? ' · ⛔ Not triggered ' + p.notTriggered : ''));
       if (f.best) L.push('🏆 Best: ' + e(f.best.symbol) + ' ' + Fmt.pct(f.best.pct) + ' (' + signed(f.best.net) + ') · ' + e(f.best.strategy));
@@ -811,9 +872,10 @@ var SessionReview = {
       f.byTime.forEach(function (g) { L.push('🕘 ' + g.label + ': ' + tr(g.n) + ', ' + g.won + ' won, ' + signed(g.net)); });
     }
     if (f.filters.length) {
-      var names = { regime: 'Market regime', switch: 'Your Bear/Bull switch', day: 'Day\'s direction' };
+      var names = { regime: 'Market regime', switch: 'Your Bear/Bull switch', day: 'Day\'s direction' }, self = this;
       L.push('', '<b>Filters</b> (signals held back, tracked silently)');
-      f.filters.forEach(function (g) { L.push('🔕 ' + names[g.kind] + ': ' + g.n + ' held back, they averaged ' + Fmt.pct(g.avgPct) + (g.avgPct < 0 ? ' (the filter helped)' : g.avgPct > 0 ? ' (they would have made money)' : '')); });
+      f.filters.forEach(function (g) { L.push('🔕 ' + names[g.kind] + (g.intraday === false ? ' (swing and longer)' : '') + ': ' + g.n + ' held back, ' + self.filterText(g)); });
+      if (f.alerts.heldFate && (f.alerts.heldFate.notTriggered || f.alerts.heldFate.open || f.alerts.heldFate.noData)) L.push('🔕 Of the ' + f.alerts.blocked + ' held back today: ' + this.fateText(f.alerts.heldFate, f.alerts.perStock, true) + '.');
     }
     if (f.opened.length) {
       L.push('', '<b>New swing and longer signals</b>');
@@ -827,6 +889,7 @@ var SessionReview = {
       f.ai.watch.forEach(function (x) { L.push('👀 ' + e(x)); });
     }
     L.push('');
+    if (f.alerts.n && f.alerts.fate) L.push('📣 ' + f.alerts.n + ' alert' + (f.alerts.n === 1 ? '' : 's') + ' today: ' + this.fateText(f.alerts.fate, f.alerts.perStock) + (f.alerts.exit ? ', ' + f.alerts.exit + ' exit check' + (f.alerts.exit === 1 ? '' : 's') : '') + '.');
     if (f.alerts.pending) L.push('⏳ ' + f.alerts.pending + ' of today\'s intraday alerts are not judged yet.');
     if (f.open) L.push('📂 Still open: ' + f.open.n + ' paper trade' + (f.open.n === 1 ? '' : 's') + (f.open.n ? ', unrealised ' + signed(f.open.unrealised) : ''));
     if (f.total) L.push('🧾 Since start: ' + signed(f.total.net) + ' (' + Fmt.pct(f.total.returnPct) + ') over ' + f.total.closed + ' closed ' + (f.total.closed === 1 ? 'trade' : 'trades'));

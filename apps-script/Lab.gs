@@ -279,10 +279,14 @@ var Backtest = {
   summary: function () { try { return JSON.parse(Secrets.props().getProperty(this.SUMMARY) || 'null'); } catch (e) { return null; } },
   running: function () { var j = this.job(); return !!(j && j.stage !== 'done' && j.stage !== 'failed'); },
 
-  /** Outside market hours and the end-of-day work: after 18:15 or before 08:30 on trading days, any time on other days. */
+  /**
+   * Outside market hours and the end-of-day work: before 08:30 or after 18:15 on trading days (and only once today's
+   * end-of-day work is done, so the two never compete for the engine), any time on other days.
+   */
   quiet: function () {
     var today = MarketCal.ymd(), m = MarketCal.minutes();
-    return !MarketCal.isTradingDay(today) || m < 8 * 60 + 30 || m >= 18 * 60 + 15;
+    if (!MarketCal.isTradingDay(today) || m < 8 * 60 + 30) return true;
+    return m >= 18 * 60 + 15 && Engine.eodSettled();
   },
 
   /** Start a run (or keep the one already running). reason: 'menu', 'app', 'auto' or 'monthly'. */
@@ -296,11 +300,15 @@ var Backtest = {
     return j;
   },
 
-  /** Run the next step soon: in a minute when quiet, else at 18:15 (or 08:30 is too close to the open, so evening). */
+  /**
+   * Run the next step soon: in a minute when quiet; during the day at 18:16 (08:30 is too close to the open);
+   * after 18:15 while today's end-of-day work is still running, five minutes later.
+   */
   schedule: function (delayMs) {
     this.unschedule();
     var at;
     if (this.quiet()) at = new Date(Date.now() + (delayMs || 60000));
+    else if (MarketCal.minutes() >= 18 * 60 + 15) at = new Date(Date.now() + 5 * 60000);
     else at = MarketCal.at(MarketCal.ymd(), '18:16');
     ScriptApp.newTrigger('continueBacktest').timeBased().at(at).create();
     return at;
@@ -1015,6 +1023,9 @@ var AiSummary = {
     var prompt = 'You review one day of PAPER trading (virtual money) done automatically by a rule-based alert engine for Indian stocks, for its owner, a retail trader. ' +
       'Use ONLY the facts below. Do not invent, round differently or recalculate any number; quote numbers exactly as written. ' +
       'Never recommend buying or selling any stock and never predict prices. Talk about the strategies, buys versus shorts, time of day and the market filters. ' +
+      '"worked" lists only things that made money after charges; a smaller loss is not something that worked (leave "worked" empty if nothing made money). ' +
+      'When the result before charges and the result after charges differ in sign, say that the charges decided the day. ' +
+      'Repeat the verdict given for each market filter (for example "about the same, so no verdict yet"); never claim more than it says. ' +
       'Plain English, short sentences, no markdown. Reply with JSON only, in this shape: ' +
       '{"overview": "two sentences on how the day went", "worked": ["up to 3 short points"], "didnt": ["up to 3 short points"], "watch": ["up to 2 points to check in the next session"]}\n\nFacts:\n' +
       SessionReview.factLines(f).join('\n');

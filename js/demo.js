@@ -366,7 +366,8 @@ const LAB = {
 /** A sample session review (the engine builds the real one after each close). */
 const REVIEW = {
   v: 1, day: S, at: at(S, '16:20'), capital: 100000, regime: 'BULL', nifty: { last: 25410.2, pct: 0.62 },
-  alerts: { n: 9, intraday: 7, swing: 1, medium: 1, long: 0, buy: 6, short: 3, exit: 0, blocked: 4, pending: 0 },
+  alerts: { n: 9, intraday: 7, swing: 1, medium: 1, long: 0, buy: 6, short: 3, exit: 0, blocked: 4, pending: 0, perStock: 10000,
+    fate: { traded: 7, notTriggered: 1, tooPricey: 0, noData: 0, open: 1, other: 0 }, heldFate: { traded: 4, notTriggered: 0, tooPricey: 0, noData: 0, open: 0, other: 0 } },
   paper: { n: 7, won: 4, lost: 3, flat: 0, winRatePct: 57, net: 412, gross: 506, charges: 94, returnPct: 0.41, avgPct: 0.18, target: 4, stop: 3, expired: 0, notTriggered: 1 },
   best: { symbol: 'TATASTEEL', strategy: 'Opening-range breakout', horizon: 'INTRADAY', dir: 'BUY', pct: 1.12, net: 268 },
   worst: { symbol: 'AXISBANK', strategy: 'VWAP reclaim', horizon: 'INTRADAY', dir: 'SHORT', pct: -0.64, net: -151 },
@@ -377,7 +378,7 @@ const REVIEW = {
   ],
   byDir: { BUY: { n: 4, won: 3, lost: 1, net: 506, avgPct: 0.52 }, SHORT: { n: 3, won: 1, lost: 2, net: -94, avgPct: -0.27 } },
   byTime: [{ label: '09:15–10:30', n: 4, won: 3, lost: 1, net: 455, avgPct: 0.49 }, { label: '10:30–12:30', n: 3, won: 1, lost: 2, net: -43, avgPct: -0.24 }],
-  filters: [{ kind: 'day', n: 4, won: 1, avgPct: -0.31, net: -120 }],
+  filters: [{ kind: 'day', intraday: true, n: 4, won: 1, avgPct: -0.31, net: -120, takenAvgPct: 0.18, verdict: 'few' }],
   opened: [{ symbol: 'TITAN', horizon: 'SWING', strategy: 'Base breakout', dir: 'BUY', entryLow: 3401, entryHigh: 3420, stop: 3265, target1: 3640 }],
   open: { n: 2, unrealised: 186 }, total: { net: 2140, returnPct: 2.14, closed: 46 },
   ai: { overview: 'A small gain: morning breakouts did the work, while later shorts gave some of it back.', worked: ['Opening-range breakouts made ₹341 from 3 trades.', 'Alerts before 10:30 won 3 of 4.'], didnt: ['Shorts lost ₹94 over 3 trades on a day Nifty 50 rose 0.62%.'], watch: ['Check whether shorts keep losing on up days before trusting them.'], model: 'gemini-3.5-flash-lite', at: at(S, '16:21') },
@@ -388,6 +389,7 @@ export const demo = {
   lab: LAB,
   review: REVIEW,
   alertsTotal: 0,
+  held: [],
   backtest: { state: 'done' },
   ai: { enabled: false, key: false },
   portfolio: null,

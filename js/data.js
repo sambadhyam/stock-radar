@@ -36,6 +36,7 @@ function adapt(b) {
     labSettings: b.labSettings || null,
     review: b.review || null,
     alertsTotal: b.alertsTotal || (b.alerts ? b.alerts.length : 0),
+    held: Array.isArray(b.held) ? b.held : [], // engine 0.6.5+: setups the market filter held back (paper only)
   };
 }
 

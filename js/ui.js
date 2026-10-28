@@ -16,7 +16,7 @@ export function horizonTag(hz, withWindow = false) {
 }
 
 export function statusChip(status) {
-  const cls = status === 'live' ? 'live' : status === 'rejected' ? 'rejected' : 'paper';
+  const cls = status === 'live' ? 'live' : status === 'rejected' ? 'rejected' : status === 'held' ? 'held' : 'paper';
   return h('span', { class: 'chip ' + cls }, t('status.' + cls));
 }
 

@@ -371,10 +371,12 @@ export function openAlert(a) {
       trackStrip(st.outcomes),
       stripLegend());
 
+    const held = a.status === 'held';
     const statusNote = h('div', { class: 'paper-note' }, icon(ICONS.shield),
-      h('span', null, isExit ? t('alert.exitNote')
-        : a.dir === 'short' ? t('alert.shortNote')
-          : a.status === 'live' ? t('status.liveNote', { win: st.win, n: st.trades }) : t('status.paperNote')));
+      h('span', null, held ? t('alert.heldNote', { why: a.held || t('status.held').toLowerCase() })
+        : isExit ? t('alert.exitNote')
+          : a.dir === 'short' ? t('alert.shortNote')
+            : a.status === 'live' ? t('status.liveNote', { win: st.win, n: st.trades }) : t('status.paperNote')));
     const p = a.paper;
     const paperLine = p && p.qty > 0 ? h('p', { class: 'note' }, t('alert.paperResult', { qty: fmt.int(p.qty), fill: fmt.price(p.fill) }) +
       (p.exit != null && p.net != null ? t('alert.paperExit', { exit: fmt.price(p.exit), net: fmt.signedMoney(p.net) }) : '') + '.') : null;
@@ -395,9 +397,9 @@ export function openAlert(a) {
     return h('div', null, head, chart, statusNote, paperLine,
       h('h3', null, isExit ? t('alert.changed') : t('alert.plan')),
       isExit ? h('p', { class: 'muted', style: { marginBottom: '10px' } }, a.headline) : null,
-      plan, sizeBlock,
+      plan, held ? null : sizeBlock,
       h('h3', null, t('alert.why')),
       h('ul', { class: 'bullets' }, a.why.map((w) => h('li', null, w))),
-      record, actions);
+      record, held ? null : actions); // a held-back setup was never a signal: no size, no order to copy
   }, { label: a.symbol });
 }

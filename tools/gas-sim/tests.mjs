@@ -111,8 +111,10 @@ function world(sim, opts = {}) {
       }
       if (route.endsWith('getCandleData')) {
         w.candleCalls.push(body);
+        if (w.onCandle) w.onCandle(body);
         const from = new Date(body.fromdate.replace(' ', 'T') + ':00+05:30'), to = new Date(body.todate.replace(' ', 'T') + ':00+05:30');
         if (w.rateLimitNext > 0) { w.rateLimitNext--; return { code: 403, body: { status: false, message: 'Access denied because of exceeding access rate', errorcode: 'AB1019' } }; }
+        if (w.refuse && w.refuse[body.symboltoken] > 0) { w.refuse[body.symboltoken]--; return { code: 403, body: { status: false, message: 'Access denied because of exceeding access rate', errorcode: 'AB1019' } }; }
         const custom = w.candleGen && w.candleGen(body.symboltoken, body.interval, from, to);
         if (custom) {
           const rows = custom.filter((c) => c.t >= from.getTime() && c.t <= to.getTime()).map((c) => [new Date(c.t).toISOString(), c.o, c.h, c.l, c.c, c.v]);
@@ -197,7 +199,8 @@ test('files load in any order and the menu is created', () => {
   const { sim, G } = fresh();
   sim.state.uiAvailable = true;
   G.onOpen();
-  eq(sim.state.menu.items.length, 13, 'menu items');
+  eq(sim.state.menu.items.length, 14, 'menu items');
+  ok(sim.state.menu.items.some((it) => it[1] === 'menuFinishEndOfDay'), 'finish end of day');
   eq(sim.state.menu.items[0][1], 'menuCreateSheets');
 });
 
@@ -672,6 +675,152 @@ test('end of day waits for Angel One to publish today\'s candle, then gives up a
   tickAtDay(G, '2026-10-26', '16:46');
   const msg = w.telegram.slice(sent0).join('\n');
   ok(/Daily summary/.test(msg) && /had not published/.test(msg), msg);
+});
+
+/** A clock for the script that moves only when it asks Angel One for candles or sleeps, so deadlines bite as on Google. */
+function slowClock(G, w, msPerCandle, sim) {
+  const c = { now: Date.now() };
+  sim.run('Date').now = () => c.now;
+  w.onCandle = () => { c.now += msPerCandle; };
+  const sleep = G.Utilities.sleep;
+  G.Utilities.sleep = (ms) => { c.now += ms; sleep(ms); };
+  return c;
+}
+
+test('end of day: price history carries on where it stopped and never asks for the same stock twice', () => {
+  const { G, sim, w } = marketWorld();
+  G.MarketCal._now = at('2026-10-23T21:00:00+05:30');
+  G.loadHistory();
+  G.MarketCal._now = at('2026-10-26T16:05:00+05:30');
+  w.daily['99926000'] = SC.dailyFrom(SC.trend(300, 20000, 0.08), { end: '2026-10-26', vol: 0 });
+  const quietMon = SC.dailyFrom(SC.trend(300, 100, 0.01), { end: '2026-10-26', vol: 2e6 });
+  w.candleGen = (token, interval) => (interval === 'ONE_DAY' ? w.daily[token] || (BY_TOKEN[token] ? quietMon : null) : null);
+  const clock = slowClock(G, w, 700, sim); // each request takes 0.7 s, so one run gets through only part of the list
+  w.refuse = { [TOKENS.BIG001]: 2, [TOKENS.MID010]: 1 }; // early stocks refused for a moment
+  const day = { day: '2026-10-26' };
+  const asked = {}; w.candleCalls = [];
+  let runs = 0, r;
+  do { r = G.Scans.updateHistory('2026-10-26', day, clock.now + 120000); runs++; } while (r !== 'done' && runs < 40);
+  eq(r, 'done', 'finished');
+  ok(runs > 3, 'took several runs: ' + runs);
+  w.candleCalls.forEach((c) => { asked[c.symboltoken] = (asked[c.symboltoken] || 0) + 1; });
+  const targets = G.Backfill.targets().length;
+  const twice = Object.entries(asked).filter(([t, n]) => n > 1 + (t === TOKENS.BIG001 ? 2 : t === TOKENS.MID010 ? 1 : t === '99926000' ? 0 : 0));
+  eq(twice.length, 0, 'no stock asked for again: ' + JSON.stringify(twice.slice(0, 5)));
+  ok(w.candleCalls.length <= targets + 3, 'requests ' + w.candleCalls.length + ' for ' + targets + ' stocks');
+  eq(G.History.lastDay('BIG001'), 20261026, 'the refused stock was asked again and updated');
+  eq(G.History.lastDay('SML300'), 20261026, 'the last stock updated');
+  ok(sim.ss.getSheetByName('HealthLog').dump().some((row) => /left for the next run/.test(row.join(' '))), 'each run logged');
+});
+
+test('end of day: running late at 18:00 — a message, then it carries on in the background and the summary still comes', () => {
+  const { G, sim, w } = marketWorld();
+  G.MarketCal._now = at('2026-10-23T21:00:00+05:30');
+  G.loadHistory();
+  w.daily['99926000'] = SC.dailyFrom(SC.trend(300, 20000, 0.08), { end: '2026-10-26', vol: 0 });
+  const quietMon = SC.dailyFrom(SC.trend(300, 100, 0.01), { end: '2026-10-26', vol: 2e6 });
+  w.candleGen = (token, interval) => (interval === 'ONE_DAY' ? w.daily[token] || (BY_TOKEN[token] ? quietMon : null) : null);
+  G.MarketCal._now = at('2026-10-26T08:20:00+05:30');
+  G.Schedule.install();
+  tickAtDay(G, '2026-10-26', '08:50');
+  const sent0 = w.telegram.length;
+  slowClock(G, w, 5000, sim); // a very slow evening: each run gets through only a few stocks
+  ['16:00', '16:10', '17:00', '17:59'].forEach((t) => tickAtDay(G, '2026-10-26', t));
+  eq(w.telegram.length, sent0, 'no summary yet');
+  tickAtDay(G, '2026-10-26', '18:00');
+  const late = w.telegram.slice(sent0).join('\n');
+  ok(/running late/.test(late) && /updating the price history/.test(late) && /stocks to go/.test(late), late);
+  ok(!sim.state.triggers.some((t) => t.handler === 'engineTick'), 'minute trigger stopped');
+  ok(sim.state.triggers.some((t) => t.handler === 'continueEndOfDay'), 'background run scheduled');
+  // The background runs carry on until the day is done.
+  w.onCandle = null; // Angel One answers quickly again
+  G.MarketCal._now = at('2026-10-26T18:02:00+05:30');
+  G.continueEndOfDay();
+  const day = JSON.parse(sim.state.props.get('DAY_STATE'));
+  ok(day.eod, 'done: ' + JSON.stringify(day.eodDone));
+  ok(!sim.state.triggers.some((t) => t.handler === 'continueEndOfDay'), 'no more background runs');
+  const msgs = w.telegram.slice(sent0).join('\n----\n');
+  ok(/Daily summary/.test(msgs) && /End-of-day work 16:00–18:02, later than planned/.test(msgs), msgs);
+  eq(w.telegram.filter((t) => /running late/.test(t)).length, 1, 'the late message once');
+});
+
+test('end of day: at 22:30 whatever is left is skipped, so the closing summary still goes out', () => {
+  const { G, sim, w } = marketWorld();
+  G.MarketCal._now = at('2026-10-23T21:00:00+05:30');
+  G.loadHistory();
+  w.daily['99926000'] = SC.dailyFrom(SC.trend(300, 20000, 0.08), { end: '2026-10-26', vol: 0 });
+  G.MarketCal._now = at('2026-10-26T08:20:00+05:30');
+  G.Schedule.install();
+  tickAtDay(G, '2026-10-26', '08:50');
+  const sent0 = w.telegram.length;
+  slowClock(G, w, 60000, sim); // hopeless: a minute per request
+  tickAtDay(G, '2026-10-26', '16:00');
+  tickAtDay(G, '2026-10-26', '18:00');
+  G.MarketCal._now = at('2026-10-26T20:00:00+05:30');
+  G.continueEndOfDay();
+  ok(!JSON.parse(sim.state.props.get('DAY_STATE')).eod, 'still going at 20:00');
+  ok(sim.state.triggers.some((t) => t.handler === 'continueEndOfDay'), 'next run planned');
+  G.MarketCal._now = at('2026-10-26T22:31:00+05:30');
+  G.continueEndOfDay();
+  const day = JSON.parse(sim.state.props.get('DAY_STATE'));
+  ok(day.eod, 'closed at the cap');
+  const msgs = w.telegram.slice(sent0).join('\n----\n');
+  ok(/Daily summary/.test(msgs) && /Not finished in time, so left out today: price history/.test(msgs), msgs);
+  ok(!sim.state.triggers.some((t) => t.handler === 'continueEndOfDay'), 'stopped');
+});
+
+test('end of day: price history stops after 20 minutes of work, so a slow evening cannot use up the day\'s trigger time', () => {
+  const { G, w } = marketWorld();
+  G.MarketCal._now = at('2026-10-23T21:00:00+05:30');
+  G.loadHistory();
+  G.MarketCal._now = at('2026-10-26T17:30:00+05:30');
+  w.daily['99926000'] = SC.dailyFrom(SC.trend(300, 20000, 0.08), { end: '2026-10-26', vol: 0 });
+  const day = { day: '2026-10-26', histProbed: 1, histMs: 20 * 60000 };
+  const calls = w.candleCalls.length;
+  eq(G.Scans.updateHistory('2026-10-26', day, Date.now() + 200000), 'done', 'gives up on the rest');
+  eq(w.candleCalls.length, calls, 'no more requests');
+  ok(/Angel One was slow today: after 20 minutes \d+ stocks were still without today's candle/.test(day.histNote), day.histNote);
+});
+
+test('end of day: the menu finishes a day the older code left half done', () => {
+  const { G, sim, w } = marketWorld();
+  sim.state.uiAvailable = true;
+  G.MarketCal._now = at('2026-10-23T21:00:00+05:30');
+  G.loadHistory();
+  w.daily['99926000'] = SC.dailyFrom(SC.trend(300, 20000, 0.08), { end: '2026-10-26', vol: 0 });
+  const quietMon = SC.dailyFrom(SC.trend(300, 100, 0.01), { end: '2026-10-26', vol: 2e6 });
+  w.candleGen = (token, interval) => (interval === 'ONE_DAY' ? w.daily[token] || (BY_TOKEN[token] ? quietMon : null) : null);
+  // The 0.6.4 engine got stuck on its first step (price history) and stopped at 18:00.
+  sim.state.props.set('DAY_STATE', JSON.stringify({ day: '2026-10-26', pre: 1, eodStep: 0, hc: 120 }));
+  G.MarketCal._now = at('2026-10-26T15:00:00+05:30');
+  eq(G.menuFinishEndOfDay(), false, 'not before 16:00');
+  ok(sim.state.alerts.some((a) => /starts by itself at 16:00/.test(a.msg || a.message || JSON.stringify(a))), 'says when');
+  G.MarketCal._now = at('2026-10-26T20:15:00+05:30');
+  const sent0 = w.telegram.length;
+  eq(G.menuFinishEndOfDay(), true, 'finished in one go');
+  const day = JSON.parse(sim.state.props.get('DAY_STATE'));
+  ok(day.eod && day.eodDone.evi && day.eodDone.hist && day.eodDone.rev, JSON.stringify(day.eodDone));
+  ok(w.telegram.slice(sent0).some((t) => /Daily summary/.test(t)), 'summary sent');
+  eq(G.menuFinishEndOfDay(), true, 'a second press says it is done');
+  ok(sim.state.alerts.some((a) => /already done/.test(JSON.stringify(a))), 'already done');
+});
+
+test('backtest: after 18:15 it waits until today\'s end-of-day work is done', () => {
+  const { G, sim } = marketWorld();
+  G.MarketCal._now = at('2026-10-26T18:20:00+05:30');
+  sim.state.props.set('DAY_STATE', JSON.stringify({ day: '2026-10-26', eodStart: at('2026-10-26T16:00:00+05:30'), eodDone: { evi: 1 } }));
+  eq(G.Backtest.quiet(), false, 'end of day still running');
+  const when = G.Backtest.schedule();
+  ok(when.getTime() - Date.now() >= 4 * 60000 && when.getTime() - Date.now() <= 6 * 60000, 'tries again in five minutes: ' + when.toISOString());
+  sim.state.props.set('DAY_STATE', JSON.stringify({ day: '2026-10-26', eodStart: 1, eod: 2 }));
+  eq(G.Backtest.quiet(), true, 'done');
+  sim.state.props.set('DAY_STATE', JSON.stringify({ day: '2026-10-26' }));
+  eq(G.Backtest.quiet(), true, 'the engine did not run today, so nothing to wait for');
+  G.MarketCal._now = at('2026-10-26T17:00:00+05:30');
+  eq(G.Backtest.quiet(), false, 'not during the evening work');
+  G.MarketCal._now = at('2026-10-26T22:40:00+05:30');
+  sim.state.props.set('DAY_STATE', JSON.stringify({ day: '2026-10-26', eodStart: 1 }));
+  eq(G.Backtest.quiet(), true, 'after the 22:30 cap the backtest may go');
 });
 
 test('no signals while the regime is unknown, and the brief says what to do', () => {
@@ -1304,6 +1453,74 @@ test('session review: the AI part puts the day\'s numbers into words, and the re
   eq(post(G, { a: 'settings', t: token, settings: { sessionReview: false } }).ok, true);
   G.Config._cache = null;
   eq(G.Config.get('sessionReview'), false);
+});
+
+test('session review: every alert is accounted for, and each filter is judged against the trades taken', () => {
+  const { G, sim } = marketWorld();
+  const day = '2026-10-27';
+  const D = sim.run('Date'); // dates as the script's own realm makes them, like Sheets returns them
+  const t = (hhmm) => new D(at(day + 'T' + hhmm + ':00+05:30'));
+  let n = 0;
+  const row = (o) => Object.assign({ id: 'A' + (++n), createdAt: t('10:00'), symbol: 'TCS', horizon: 'INTRADAY', strategy: 'ema-cross', strategyStatus: 'PAPER', direction: 'SHORT',
+    entryLow: 100, entryHigh: 100.2, stop: 101, target1: 98, status: 'CLOSED', closedAt: t('11:00'), outcome: 'STOP_HIT', track: 'main', paperQty: 10,
+    grossPnl: -20, charges: 10, netPnl: -30, netPct: -0.3, telegram: 'sent' }, o);
+  const dayNote = 'not sent: against the day: Nifty 50 is up 0.20% since the open, tracked silently';
+  G.AlertBook.ensureHeaders();
+  G.Store.append('Alerts', [
+    row({}), row({}), row({ outcome: 'TARGET_HIT', grossPnl: 60, netPnl: 50, netPct: 0.5 }), row({ outcome: 'EXPIRED', grossPnl: 0, netPnl: -10, netPct: -0.1 }),
+    row({ outcome: 'NOT_TRIGGERED', paperQty: '', grossPnl: '', charges: '', netPnl: '', netPct: '' }),
+    row({ symbol: 'MARUTI', outcome: 'EXPIRED', paperQty: 0, grossPnl: '', charges: '', netPnl: '', netPct: 0 }), // dearer than the per-stock limit
+    ...Array.from({ length: 6 }, () => row({ track: 'shadow', telegram: dayNote, netPct: -0.06, netPnl: -6 })),
+    row({ track: 'shadow', telegram: dayNote, outcome: 'NOT_TRIGGERED', netPct: '', netPnl: '' }),
+    ...Array.from({ length: 5 }, () => row({ track: 'shadow', horizon: 'SWING', strategy: 'ema-pullback', direction: 'BUY', telegram: 'not sent: blocked by the Bear regime, tracked silently', status: 'OPEN', closedAt: '', outcome: '', netPct: '', netPnl: '' })),
+  ]);
+  const f = G.SessionReview.build(day);
+  eq(JSON.stringify(f.alerts.fate), JSON.stringify({ traded: 4, notTriggered: 1, tooPricey: 1, noData: 0, open: 0, other: 0 }));
+  eq(f.alerts.blocked, 12); eq(f.alerts.heldFate.traded, 6); eq(f.alerts.heldFate.open, 5); eq(f.alerts.heldFate.notTriggered, 1);
+  eq(f.paper.n, 4); eq(f.paper.gross, 20); eq(f.paper.net, -20); eq(f.paper.charges, 40); // the charges turned a small gain into a loss
+  eq(f.filters.length, 1); eq(f.filters[0].kind, 'day'); eq(f.filters[0].takenAvgPct, -0.04); eq(f.filters[0].verdict, 'same');
+  const msg = G.SessionReview.message(f);
+  if (process.env.DUMP_TG) console.log('\n=== REVIEW ===\n' + msg + '\n=== FACTS ===\n' + G.SessionReview.factLines(f).join('\n'));
+  ok(msg.includes('after ₹40 charges (+₹20 before them)'), msg);
+  ok(msg.includes('📣 6 alerts today: 4 paper trades, 1 never reached the entry, 1 was too pricey for the ₹10,000 per-stock limit (counted in % only).'), msg);
+  ok(msg.includes('🔕 Day\'s direction: 6 held back, averaged −0.06% a trade against −0.04% for the trades taken: about the same, so no verdict yet'), msg);
+  ok(msg.includes('🔕 Of the 12 held back today: 6 were judged, 1 never reached the entry, 5 still open.'), msg);
+  ok(!/the filter helped/.test(msg), 'no claim the numbers do not support');
+  const facts = G.SessionReview.factLines(f).join('\n');
+  ok(/Result before charges: \+₹20\./.test(facts) && /about the same, so no verdict yet/.test(facts) && /too pricey for the ₹10,000 per-stock limit/.test(facts), facts);
+  // The verdict itself.
+  eq(G.SessionReview.verdict(6, -0.3, -0.04, true), 'helped');
+  eq(G.SessionReview.verdict(6, 0.2, -0.04, true), 'cost');
+  eq(G.SessionReview.verdict(3, -1, 0, true), 'few');
+  eq(G.SessionReview.verdict(10, -1.0, -0.8, false), 'same');
+  eq(G.SessionReview.verdict(10, -1.0, null, false), 'helped');
+});
+
+test('web app: swing and medium setups held back in a Bear market reach the app as paper-only plans', () => {
+  const end = '2026-10-26';
+  const { G, sim, w } = marketWorld({ end, niftyDown: true, daily: { [TOKENS.RELIANCE]: SC.daily['base-breakout']() } });
+  const token = sim.state.props.get('APP_TOKEN');
+  G.MarketCal._now = at('2026-10-23T21:00:00+05:30');
+  G.loadHistory();
+  G.MarketCal._now = at('2026-10-26T08:20:00+05:30');
+  G.Schedule.install();
+  tickAtDay(G, end, '08:50');
+  const sent0 = w.telegram.length;
+  tickAtDay(G, end, '16:00');
+  eq(G.Market.saved().state, 'BEAR', 'a falling Nifty');
+  ok(!w.telegram.slice(sent0).some((x) => /BUY RELIANCE/.test(x)), 'no buy alert in a Bear market');
+  const held = alertsRows(sim).filter((r) => r.track === 'shadow' && r.symbol === 'RELIANCE');
+  ok(held.length >= 1 && held.every((r) => /blocked by the Bear regime/.test(r.telegram)), JSON.stringify(held.map((r) => r.telegram)));
+  const b = post(G, { a: 'bundle', t: token }).data;
+  eq(b.market.regime, 'bear');
+  ok(b.market.reasons.some((x) => /below its 200-day average/.test(x)), b.market.reasons.join(' '));
+  ok(!b.alerts.some((a) => a.symbol === 'RELIANCE' && a.horizon !== 'intraday'), 'not among the real alerts');
+  const plan = b.held.find((a) => a.symbol === 'RELIANCE' && a.strategy === 'base-breakout');
+  ok(plan && plan.horizon === 'swing' && plan.held === 'blocked by the Bear regime' && plan.entryLo > 0 && plan.stop < plan.entryLo && plan.targets[0] > plan.entryHi, JSON.stringify(plan));
+  if (process.env.DUMP_BUNDLE) { // for screenshots of the app against a real bundle
+    const chart = post(G, { a: 'chart', t: token, symbol: 'RELIANCE' }).data, alertChart = post(G, { a: 'chart', t: token, symbol: 'RELIANCE', alertId: plan.id }).data;
+    fs.writeFileSync(process.env.DUMP_BUNDLE, JSON.stringify({ bundle: b, chart, alertChart }));
+  }
 });
 
 test('web app: older alerts come in pages for the date filters, newest first', () => {

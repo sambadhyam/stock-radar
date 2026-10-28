@@ -8,15 +8,18 @@
  *   09:21–14:31  a minute after each 5-minute bar closes: intraday scan (Signals.gs)
  *   09:15–15:30  every few minutes: market snapshot
  *   15:10   square-off reminder when intraday alerts went out today
- *   16:00+  end of day in steps: update price history, judge intraday alerts (1-minute candles),
+ *   16:00+  end of day in steps: judge intraday alerts (1-minute candles), update price history,
  *           judge swing/medium/long alerts and update paper trades and strategy numbers (Review.gs),
  *           regime and new swing/medium/long scans, closing summary with paper results on Telegram
- *           and email (plus the readiness report on day 30, 60 and 90); then the minute trigger removes itself
+ *           and email (plus the readiness report on day 30, 60 and 90), session review; then the minute
+ *           trigger removes itself
+ *   18:00   if the end-of-day work is not done yet: a "running late" message, then one-off runs every two
+ *           minutes until it is (continueEndOfDay); at 22:30 whatever is left is skipped so the summary still goes out
  *   Saturday weekly report: Live-ready / Rejected decisions and the week's paper results
  * Weekends and NSE holidays are skipped.
  */
 
-var ENGINE_HANDLERS = ['dailyKickoff', 'engineTick', 'weeklyReport', 'continueHistory'];
+var ENGINE_HANDLERS = ['dailyKickoff', 'engineTick', 'weeklyReport', 'continueHistory', 'continueEndOfDay'];
 
 /* ============================== Schedule ============================== */
 
@@ -159,6 +162,30 @@ function engineTick() {
   Jobs.run('tick', function () { Engine.tick(); }, { lock: true, wait: 1000 });
 }
 
+/**
+ * After 18:00 when the end-of-day work is not done yet (Engine.handOver): one more stretch of it, then again two
+ * minutes later until it is. Also used by Stock Radar → Finish today's end-of-day work.
+ */
+function continueEndOfDay() {
+  Engine.unscheduleContinue();
+  var done = Jobs.run('endOfDayLate', function () { return Engine.finishEndOfDay(Date.now() + 240000); }, { lock: true, wait: 20000 });
+  // Not done yet, failed, or another job held the engine: try again shortly (never past midnight's session end).
+  if (done !== true && MarketCal.minutes() < 23 * 60 + 30) Engine.scheduleContinue(120000);
+}
+
+/** Stock Radar → Finish today's end-of-day work: for an evening when the closing summary did not come. */
+function menuFinishEndOfDay() {
+  var today = MarketCal.ymd(), m = MarketCal.minutes(), day = DayState.load(today), title = 'End of day';
+  if (!MarketCal.isTradingDay(today)) { Ui.alert(title, 'Today is not a trading day, so there is no end-of-day work.'); return false; }
+  if (m < 16 * 60) { Ui.alert(title, 'The end-of-day work starts by itself at 16:00. Please try again after that.'); return false; }
+  if (day.eod) { Ui.alert(title, 'Today\'s end-of-day work is already done (finished at ' + Fmt.time(day.eod) + ').'); return true; }
+  var done = Jobs.run('endOfDayLate', function () { return Engine.finishEndOfDay(Date.now() + 240000); }, { lock: true, wait: 20000 });
+  if (done !== true) Engine.scheduleContinue(60000);
+  Ui.alert(title, done === true ? 'Done. The closing summary and the session review are on Telegram.'
+    : 'Started. It carries on in the background a few minutes at a time, and the closing summary comes to Telegram when it is done. You can close the sheet.');
+  return done === true;
+}
+
 /** Runs every Saturday morning: strategy decisions and the weekly report. */
 function weeklyReport() {
   Jobs.run('weekly', function () { Engine.weekly(); }, { lock: true, wait: 20000 });
@@ -188,7 +215,11 @@ var Engine = {
     if (m >= 16 * 60 && !day.eod) { this.endOfDaySteps(today, day, t0 + 240000); changed = true; }
 
     if (changed) DayState.save(day);
-    if (day.eod || m >= 18 * 60) Schedule.stopTick();
+    if (day.eod || m >= 18 * 60) {
+      Schedule.stopTick();
+      // Not finished by 18:00: carry on in the background instead of giving up, and say so.
+      if (!day.eod && m >= 16 * 60) this.handOver(today, day);
+    }
   },
 
   /** The 5-minute bar (its closing minute) to scan now, or 0. Runs a minute after each close, up to the no-entry time. */
@@ -198,35 +229,122 @@ var Engine = {
   },
 
   /**
-   * End of day in steps, as many as fit in this run; the next minute's run continues.
-   * A step that fails three times is skipped so the closing summary always goes out.
+   * The end-of-day steps in order. Today's intraday alerts are judged first: that needs only their own 1-minute
+   * candles, so the paper results never wait for the slower price-history update.
    */
-  endOfDaySteps: function (today, day, deadline) {
+  eodSteps: function (today, day, deadline) {
     var self = this;
-    var steps = [
-      { key: 'hist', job: 'historyUpdate', run: function () { return Scans.updateHistory(today, day, deadline); } },
+    return [
       { key: 'evi', job: 'evaluateIntraday', run: function () { return Review.intraday(today, day, deadline); } },
+      { key: 'hist', job: 'historyUpdate', run: function () { return Scans.updateHistory(today, day, deadline); } },
       { key: 'evd', job: 'evaluateDaily', run: function () { Review.daily(today); return 'done'; } },
       { key: 'scan', job: 'endOfDayScan', run: function () { var r = Scans.endOfDay(today, day); day.eodScan = { scanned: r.scanned || 0, signals: r.signals || 0 }; return 'done'; } },
       { key: 'hold', job: 'holdings', run: function () { day.holdings = Portfolio.value(); Portfolio.taxNotes(); return 'done'; } },
       { key: 'sum', job: 'endOfDay', run: function () { self.endOfDay(today, day); return 'done'; } },
       { key: 'rev', job: 'sessionReview', run: function () { SessionReview.run(today); return 'done'; } },
     ];
-    day.eodStep = day.eodStep || 0;
-    while (day.eodStep < steps.length && Date.now() < deadline - 20000) {
-      var st = steps[day.eodStep];
+  },
+
+  /** What each step is doing, for the "running late" message. */
+  EOD_NAMES: { evi: 'judging today\'s intraday alerts', hist: 'updating the price history', evd: 'judging swing, medium and long alerts',
+    scan: 'the end-of-day scan', hold: 'valuing your holdings', sum: 'the closing summary', rev: 'the session review' },
+  /** The step order before 0.6.5, to carry on a day that the older code had started. */
+  EOD_OLD_ORDER: ['hist', 'evi', 'evd', 'scan', 'hold', 'sum', 'rev'],
+  /** After this (22:30), steps still left are skipped so the closing summary goes out before the session ends. */
+  LATE_CAP: 22 * 60 + 30,
+  /** Trigger time the background runs may use after 18:00 before what is left is skipped (Google allows 90 minutes a day). */
+  LATE_BUDGET_MS: 30 * 60000,
+
+  /** Steps finished today, by key (a day begun by the older code kept a step number instead). */
+  eodDone: function (day) {
+    if (!day.eodDone) {
+      day.eodDone = {};
+      if (day.eodStep) this.EOD_OLD_ORDER.slice(0, day.eodStep).forEach(function (k) { day.eodDone[k] = 1; });
+    }
+    return day.eodDone;
+  },
+
+  /**
+   * End of day in steps, as many as fit in this run; the next run continues where this one stopped.
+   * A step that fails three times is skipped so the closing summary always goes out.
+   */
+  endOfDaySteps: function (today, day, deadline) {
+    var steps = this.eodSteps(today, day, deadline), done = this.eodDone(day);
+    if (!day.eodStart) day.eodStart = MarketCal.now().getTime();
+    for (var i = 0; i < steps.length; i++) {
+      var st = steps[i];
+      if (done[st.key]) continue;
+      if (Date.now() >= deadline - 20000) return;
       var r = Jobs.run(st.job, st.run);
       if (r === null) {
         day['eodTries_' + st.key] = (day['eodTries_' + st.key] || 0) + 1;
         if (day['eodTries_' + st.key] < 3) return;
         day.eodSkipped = (day.eodSkipped || []).concat([st.job]);
-        day.eodStep++;
+        done[st.key] = 1;
         continue;
       }
       if (r === 'wait' || r === 'more') return;
-      day.eodStep++;
+      done[st.key] = 1;
     }
-    if (day.eodStep >= steps.length) day.eod = Date.now();
+    day.eod = Date.now();
+  },
+
+  /** The step the end-of-day work is on, or null when it is done. */
+  eodCurrent: function (day) {
+    var done = this.eodDone(day), steps = this.eodSteps(day.day, day, 0);
+    for (var i = 0; i < steps.length; i++) if (!done[steps[i].key]) return steps[i].key;
+    return null;
+  },
+
+  /** 18:00 and the end-of-day work is not done: tell the owner once, then carry on every two minutes. */
+  handOver: function (today, day) {
+    if (!day.lateAt) {
+      day.lateAt = MarketCal.now().getTime();
+      DayState.save(day);
+      var key = this.eodCurrent(day);
+      Notify.safeTelegram('⏳ <b>End-of-day work is running late</b>\nStill working on: ' + (this.EOD_NAMES[key] || 'the last steps') +
+        (key === 'hist' && day.histLeft ? ' (' + day.histLeft + ' stocks to go)' : '') + '.\n' +
+        'It carries on in the background; the closing summary and the session review follow when it is done (by 22:30 at the latest).');
+    }
+    this.scheduleContinue(60000);
+  },
+
+  scheduleContinue: function (delayMs) {
+    this.unscheduleContinue();
+    ScriptApp.newTrigger('continueEndOfDay').timeBased().after(delayMs || 120000).create();
+  },
+  unscheduleContinue: function () {
+    Schedule.triggers('continueEndOfDay').forEach(function (t) { ScriptApp.deleteTrigger(t); });
+  },
+
+  /** One stretch of unfinished end-of-day work, outside the minute trigger. Returns true when the day is done. */
+  finishEndOfDay: function (deadline) {
+    var t0 = Date.now(), now = MarketCal.now(), today = MarketCal.ymd(now), m = MarketCal.minutes(now), day = DayState.load(today);
+    if (day.eod || !MarketCal.isTradingDay(today) || m < 16 * 60) return true;
+    if (m >= this.LATE_CAP || (day.lateMs || 0) >= this.LATE_BUDGET_MS) this.forceEndOfDay(today, day);
+    else this.endOfDaySteps(today, day, deadline);
+    day.lateMs = (day.lateMs || 0) + (Date.now() - t0);
+    DayState.save(day);
+    return !!day.eod;
+  },
+
+  /** 22:30 (or the late time budget) and still not done: skip what is left, except the closing summary and the review. */
+  forceEndOfDay: function (today, day) {
+    var steps = this.eodSteps(today, day, Date.now() + 120000), done = this.eodDone(day);
+    steps.forEach(function (st) {
+      if (done[st.key]) return;
+      if (st.key === 'sum' || st.key === 'rev') Jobs.run(st.job, st.run);
+      else day.eodCut = (day.eodCut || []).concat([st.job]);
+      done[st.key] = 1;
+    });
+    day.eod = Date.now();
+  },
+
+  /** True once there is nothing left of today's end-of-day work to wait for (the backtest waits for this). */
+  eodSettled: function () {
+    var today = MarketCal.ymd(), day = DayState.load(today);
+    if (!MarketCal.isTradingDay(today) || day.eod || MarketCal.minutes() >= this.LATE_CAP + 5) return true;
+    return !day.eodStart && MarketCal.minutes() >= 18 * 60 + 15; // the engine did not run today's end of day at all
   },
 
   /** Run a daily step once. A failing step is retried on the next ticks, up to three attempts. */
@@ -351,7 +469,10 @@ var Engine = {
     var source = snap.sources.indexOf('angel') >= 0 ? 'Data from Angel One.' : 'Data from backups only (' + snap.sources.join(', ') + '), Angel One did not answer.';
     lines.push('', (errors ? '⚠️' : '⚙️') + ' Engine: ' + (day.hbCount || 0) + ' market checks today, ' + (errors ? errors + ' error' + (errors > 1 ? 's' : '') + ' logged (see the ErrorLog sheet).' : 'no errors.') + ' ' + source);
     if (day.histNote) lines.push('⚠️ ' + Notify.esc(day.histNote));
-    if (day.eodSkipped && day.eodSkipped.length) lines.push('⚠️ Skipped after three failed tries: ' + Notify.esc(day.eodSkipped.join(', ')) + '.');
+    var jobName = function (j) { return { evaluateIntraday: 'judging intraday alerts', historyUpdate: 'price history', evaluateDaily: 'judging swing, medium and long alerts', endOfDayScan: 'end-of-day scan', holdings: 'holdings' }[j] || j; };
+    if (day.eodSkipped && day.eodSkipped.length) lines.push('⚠️ Skipped after three failed tries: ' + Notify.esc(day.eodSkipped.map(jobName).join(', ')) + '.');
+    if (day.eodCut && day.eodCut.length) lines.push('⚠️ Not finished in time, so left out today: ' + Notify.esc(day.eodCut.map(jobName).join(', ')) + '.');
+    if (day.eodStart) lines.push('⏱️ End-of-day work ' + Fmt.time(day.eodStart) + '–' + Fmt.time(MarketCal.now().getTime()) + (day.lateAt ? ', later than planned' : '') + '.');
     lines.push('<i>Paper results are judged on real prices after estimated Zerodha charges. Not investment advice.</i>');
     Notify.safeTelegram(lines.join('\n'));
     if (Config.get('emailDigest')) {

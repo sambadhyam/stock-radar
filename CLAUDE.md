@@ -32,6 +32,7 @@ Read `PLAN.md` first: it holds the architecture, verified API facts, quota budge
 - Never log or show key values; pass messages through `Secrets.mask`.
 - Permissions are listed explicitly in `appsscript.json` (`oauthScopes`), so automatic detection is off. A new Google service means adding its scope there; the simulator refuses anything not listed. Keep them narrow: `spreadsheets.currentonly`, `drive.file`. Never use `DriveApp` (it forces access to the whole Drive); use `DriveFiles` in Signals.gs, which calls the Drive web API.
 - Google allows 90 trigger minutes a day and the live engine needs about 45 (PLAN §5). Background work outside the schedule (like the backtest, capped by `backtestMinutesPerDay` in any 24 hours) must run outside market hours and budget its minutes.
+- Work split over several runs resumes from per-item state (what is still missing), never from a positional cursor, and never lets a slow day eat the trigger budget (give each long step a time cap). The end of day must always end with the closing summary (PLAN §3.18).
 - After any change in `apps-script/`, run `node tools/gas-sim/tests.mjs` and keep it green.
 
 ## Checking work

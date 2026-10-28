@@ -6,7 +6,7 @@
  * This file holds no keys. Keys are saved privately with  Stock Radar → 2. Set up keys.
  */
 
-var SR_VERSION = '0.6.4';
+var SR_VERSION = '0.6.5';
 var IST = 'Asia/Kolkata';
 
 /* =============================== Settings =============================== */
@@ -711,17 +711,20 @@ var Angel = {
   /**
    * Candles for many instruments at once: three requests in parallel each second (Angel One allows 3 a second),
    * retrying any that are rate-limited. Each item is {key, token, from, to} and must fit in one request.
-   * opts: {deadline (ms), batch, pause, onBatch}. Returns {data: {key: candles}, nodata: [keys], failed: {key: why}, left: [keys]}.
+   * A refused request is asked again next, in its place (so whatever is left at the deadline is the tail of the
+   * list), after a pause that grows while Angel One keeps refusing.
+   * opts: {deadline (ms), batch, pause, onBatch(out)}.
+   * Returns {data: {key: candles}, nodata: [keys], failed: {key: why}, left: [keys], retries}.
    */
   candlesMany: function (items, interval, opts) {
     opts = opts || {};
-    var self = this, out = { data: {}, nodata: [], failed: {}, left: [] };
+    var self = this, out = { data: {}, nodata: [], failed: {}, left: [], retries: 0 };
     if (!items.length) return out;
-    var jwt = this.login(false), relogged = false, tries = {}, queue = items.slice(), batch = opts.batch || 3;
+    var jwt = this.login(false), relogged = false, tries = {}, queue = items.slice(), batch = opts.batch || 3, backoff = 0;
     var fmt = function (d) { return Utilities.formatDate(new Date(d), IST, 'yyyy-MM-dd HH:mm'); };
     while (queue.length) {
       if (opts.deadline && Date.now() > opts.deadline) { out.left = queue.map(function (it) { return it.key; }); break; }
-      var group = queue.splice(0, batch), authFail = false;
+      var group = queue.splice(0, batch), authFail = false, again = [], refused = false;
       var reqs = group.map(function (it) {
         return {
           url: self.BASE + self.ROUTES.candles, method: 'post', contentType: 'application/json', headers: self.headers(jwt), muteHttpExceptions: true,
@@ -740,13 +743,16 @@ var Angel = {
         var msg = self.message(res);
         if (/no data/i.test(msg)) { out.nodata.push(it.key); return; }
         var limited = Http.retryable(res) || !r;
-        if (!limited && self.isAuthError(res) && !relogged) { authFail = true; queue.push(it); return; }
+        if (!limited && self.isAuthError(res) && !relogged) { authFail = true; again.push(it); return; }
         tries[it.key] = (tries[it.key] || 0) + 1;
-        if (tries[it.key] < 4) queue.push(it); else out.failed[it.key] = msg;
+        if (limited) refused = true;
+        if (tries[it.key] < 4) { again.push(it); out.retries++; } else out.failed[it.key] = msg;
       });
+      queue = again.concat(queue);
       if (authFail) { jwt = this.login(true); relogged = true; }
-      if (opts.onBatch) opts.onBatch();
-      if (queue.length) Utilities.sleep(opts.pause || 1100);
+      backoff = refused ? Math.min(16000, backoff ? backoff * 2 : 2000) : 0;
+      if (opts.onBatch) opts.onBatch(out);
+      if (queue.length) Utilities.sleep(Math.max(opts.pause || 1100, backoff));
     }
     return out;
   },

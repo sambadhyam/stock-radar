@@ -71,7 +71,8 @@ export function openReview(f) {
       h('div', { class: 'big-num num ' + tone(p.net) }, signed(p.net)),
       h('div', { class: 'stat-line' },
         h('span', null, h('b', { class: tone(p.returnPct) }, fmt.pct(p.returnPct)), ' ' + t('review.ofCapital', { cap: fmt.money(f.capital) })),
-        h('span', null, t('review.charges', { c: fmt.money(p.charges) }))),
+        h('span', null, t('review.charges', { c: fmt.money(p.charges) })),
+        p.gross != null ? h('span', null, h('b', { class: tone(p.gross) }, signed(p.gross)), ' ' + t('review.beforeCharges')) : null),
       h('div', { class: 'stat-line' },
         h('span', null, h('b', null, String(p.n)), ' ' + t('review.trades')),
         h('span', null, '✅ ', h('b', null, String(p.won))),
@@ -95,7 +96,8 @@ export function openReview(f) {
     f.byTime && f.byTime.length ? h('div', null, h('h3', null, t('review.byTime')),
       table([t('review.byTime'), t('review.colTrades'), t('review.colWon'), t('review.colNet')], f.byTime.map((g) => [g.label, String(g.n), String(g.won), money(g.net)]))) : null,
     f.filters && f.filters.length ? h('div', null, h('h3', null, t('review.filters')),
-      h('ul', { class: 'bullets' }, f.filters.map((g) => h('li', null, t('review.filterLine', { by: t('backtest.filterBy.' + g.kind), n: g.n, avg: fmt.pct(g.avgPct) }) + ' ' + (g.avgPct < 0 ? t('review.filterHelped') : g.avgPct > 0 ? t('review.filterCost') : ''))))) : null,
+      h('ul', { class: 'bullets' }, f.filters.map((g) => h('li', null, filterLine(g))),
+        heldLine(f) ? h('li', null, heldLine(f)) : null)) : null,
     f.opened && f.opened.length ? h('div', null, h('h3', null, t('review.opened')),
       h('ul', { class: 'list' }, f.opened.map((o) => h('li', null, h('div', { class: 'row' },
         h('span', { class: 'row-title', style: { fontSize: '15px' } }, (o.dir === 'SHORT' ? '🔴 ' : '🟢 ') + o.symbol),
@@ -106,9 +108,43 @@ export function openReview(f) {
     h('div', { class: 'stat-line', style: { marginTop: '16px' } },
       f.total ? h('span', null, '🧾 ' + t('review.sinceStart') + ' ', h('b', { class: tone(f.total.net) }, `${signed(f.total.net)} (${fmt.pct(f.total.returnPct)})`)) : null,
       f.open ? h('span', null, '📂 ' + t('review.stillOpen') + ' ', h('b', null, String(f.open.n)), f.open.n ? h('b', { class: tone(f.open.unrealised) }, ` (${signed(f.open.unrealised)})`) : null) : null),
-    f.alerts ? h('p', { class: 'note', style: { marginTop: '8px' } }, '📣 ' + t('review.alertsLine', { n: f.alerts.n, b: f.alerts.buy, s: f.alerts.short, x: f.alerts.blocked })) : null,
+    f.alerts ? h('p', { class: 'note', style: { marginTop: '8px' } }, '📣 ' + (f.alerts.fate && f.alerts.n
+      ? t('review.alertsFate', { n: f.alerts.n, b: f.alerts.buy, s: f.alerts.short, x: f.alerts.blocked, parts: fateText(f.alerts.fate, f.alerts.perStock) })
+      : t('review.alertsLine', { n: f.alerts.n, b: f.alerts.buy, s: f.alerts.short, x: f.alerts.blocked }))) : null,
     h('p', { class: 'note faint' }, t('review.footer')),
     data.isDemo ? h('p', { class: 'note' }, t('preview.banner')) : null), { label: t('review.sheetTitle') });
+}
+
+/** "4 paper trades, 1 never reached the entry, …" — what became of the alerts (held: the held-back ones). */
+function fateText(o, perStock, held) {
+  if (!o) return '';
+  const parts = [];
+  if (o.traded) parts.push(held ? t('review.fate.judged', { n: o.traded }) : t('review.fate.traded', { n: o.traded }));
+  if (o.notTriggered) parts.push(t('review.fate.notTriggered', { n: o.notTriggered }));
+  if (o.tooPricey) parts.push(t('review.fate.tooPricey', { n: o.tooPricey, cap: fmt.money(perStock || 0) }));
+  if (o.noData) parts.push(t('review.fate.noData', { n: o.noData }));
+  if (o.open) parts.push(t('review.fate.open', { n: o.open }));
+  if (o.other) parts.push(t('review.fate.other', { n: o.other }));
+  return parts.join(', ');
+}
+
+/** One market filter: what its held-back signals did against the trades taken, and the verdict. */
+function filterLine(g) {
+  const by = t('backtest.filterBy.' + g.kind), hz = g.intraday === false ? t('review.filterLonger') : '';
+  if (!g.verdict) { // a review saved before engine 0.6.5
+    return t('review.filterLine', { by, n: g.n, avg: fmt.pct(g.avgPct) }) + ' ' + (g.avgPct < 0 ? t('review.filterHelped') : g.avgPct > 0 ? t('review.filterCost') : '');
+  }
+  const line = g.takenAvgPct != null
+    ? t('review.filterVs', { by, hz, n: g.n, avg: fmt.pct(g.avgPct), taken: fmt.pct(g.takenAvgPct) })
+    : t('review.filterAlone', { by, hz, n: g.n, avg: fmt.pct(g.avgPct) });
+  return line + ' ' + t('review.verdict.' + g.verdict);
+}
+
+/** The held-back signals that are not in the filter lines yet (never reached the entry, or still open). */
+function heldLine(f) {
+  const hf = f.alerts && f.alerts.heldFate;
+  if (!hf || !(hf.notTriggered || hf.open || hf.noData)) return '';
+  return t('review.heldFate', { n: f.alerts.blocked, parts: fateText(hf, f.alerts.perStock, true) });
 }
 
 function aiBox(f) {

@@ -415,12 +415,16 @@ var Scans = {
     return { scanned: scanned, stale: stale, signals: fresh.length, logged: out.logged, sent: out.sent };
   },
 
-  /** After the close: update the daily history of every stock. Returns 'done', 'more' or 'wait'. */
+  /**
+   * After the close: add today's candle to the daily history of every stock. Returns 'done', 'more' or 'wait'.
+   * Each run asks only for the stocks that still lack today's candle and were not asked yet today, so a run that
+   * stops for time (or a request Angel One refuses for a moment) never makes the next run fetch everything again.
+   */
   updateHistory: function (today, day, deadline) {
-    var list = Backfill.targets(), cursor = day.hc || 0, todayN = History.ymdToDay(today);
+    var t0 = Date.now(), list = Backfill.targets(), todayN = History.ymdToDay(today);
     var recentFrom = new Date(MarketCal.at(today, '09:15').getTime() - 12 * 86400000);
     var fullFrom = Backfill.fromDate(Number(Config.get('historyDays')) || 660), to = MarketCal.now();
-    if (cursor === 0) {
+    if (!day.histProbed) {
       // Has Angel One published today's daily candle yet? Check Nifty 50 first.
       var probe = list.filter(function (it) { return it.key === 'NIFTY 50'; })[0];
       if (probe) {
@@ -433,32 +437,53 @@ var Scans = {
         }
         if (k.length) History.put('NIFTY 50', k);
       }
+      day.histProbed = 1;
     }
-    var batch = [];
-    for (var i = cursor; i < list.length; i++) {
-      var it = list[i];
-      if (it.key === 'NIFTY 50' && cursor === 0) continue;
-      it.from = History.has(it.key) && History.lastDay(it.key) ? recentFrom : fullFrom;
-      it.to = to;
-      batch.push(it);
+    var tried = this.histTried(todayN);
+    var todo = list.filter(function (it) { return !tried[it.key] && !(History.lastDay(it.key) >= todayN); });
+    // Never let a slow evening eat the day's trigger time: after 20 minutes of work, scan with what has arrived.
+    if ((day.histMs || 0) >= this.HIST_BUDGET_MS && todo.length) {
+      day.histNote = 'Angel One was slow today: after 20 minutes ' + todo.length + ' stock' + (todo.length === 1 ? ' was' : 's were') + ' still without today\'s candle, so the end-of-day scan skipped ' + (todo.length === 1 ? 'it' : 'them') + '.';
+      History.saveMeta();
+      return 'done';
     }
-    var res = Angel.candlesMany(batch, 'ONE_DAY', { deadline: deadline, onBatch: function () { History.saveNowAndThen(); } });
-    Object.keys(res.data).forEach(function (key) { History.put(key, res.data[key]); });
+    todo.forEach(function (it) { it.from = History.lastDay(it.key) ? recentFrom : fullFrom; it.to = to; });
+    // Candles go into the history as they arrive, so the regular saves keep them even if this run is cut short.
+    var stored = {};
+    var store = function (out) { Object.keys(out.data).forEach(function (key) { if (!stored[key]) { stored[key] = 1; History.put(key, out.data[key]); } }); };
+    var res = todo.length ? Angel.candlesMany(todo, 'ONE_DAY', { deadline: deadline - 45000, onBatch: function (out) { store(out); History.saveNowAndThen(); } })
+      : { data: {}, nodata: [], failed: {}, left: [], retries: 0 };
+    store(res);
     res.nodata.forEach(function (key) { if (!History.has(key)) History.put(key, []); });
     History.flush();
-    var doneKeys = {};
-    batch.forEach(function (it) { doneKeys[it.key] = true; });
-    res.left.forEach(function (key) { delete doneKeys[key]; });
-    // Move the cursor past everything handled, in list order.
-    var c = cursor;
-    while (c < list.length && (doneKeys[list[c].key] || (cursor === 0 && list[c].key === 'NIFTY 50'))) c++;
-    day.hc = c;
+    var left = {};
+    res.left.forEach(function (key) { left[key] = true; });
+    todo.forEach(function (it) { if (!left[it.key]) tried[it.key] = 1; });
+    this.saveHistTried(todayN, tried);
     var failed = Object.keys(res.failed);
     day.histFailed = (day.histFailed || 0) + failed.length;
+    day.histRuns = (day.histRuns || 0) + 1;
+    day.histLeft = res.left.length;
+    day.histMs = (day.histMs || 0) + (Date.now() - t0);
+    Health.log('endOfDay', 'history', true, Date.now() - t0, Object.keys(res.data).length, 'Daily candles: ' + Object.keys(res.data).length + ' updated, ' +
+      res.nodata.length + ' without data, ' + failed.length + ' failed, ' + res.left.length + ' left for the next run, ' + (res.retries || 0) + ' retries (run ' + day.histRuns + ')');
     if (failed.length) Health.log('endOfDay', 'angel', false, 0, failed.length, 'Daily candles missing for ' + failed.slice(0, 8).join(', ') + ': ' + res.failed[failed[0]]);
-    if (c < list.length) return 'more';
+    if (res.left.length) return 'more';
     History.saveMeta();
     return 'done';
+  },
+
+  /** Trigger time the price-history update may use in one evening (the whole end of day normally needs under 10 minutes). */
+  HIST_BUDGET_MS: 20 * 60000,
+
+  /** Stocks already asked for today (kept in the cache: losing it only means asking a few of them again). */
+  histTried: function (todayN) {
+    var out = {};
+    try { (JSON.parse(CacheService.getScriptCache().get('HIST_TRIED_' + todayN) || '[]') || []).forEach(function (k) { out[k] = 1; }); } catch (e) { /* start afresh */ }
+    return out;
+  },
+  saveHistTried: function (todayN, tried) {
+    try { CacheService.getScriptCache().put('HIST_TRIED_' + todayN, JSON.stringify(Object.keys(tried)), 21600); } catch (e) { /* optional */ }
   },
 
   /** After the history update: swing, medium, long and holding checks on the day's closing data. */

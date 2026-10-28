@@ -59,13 +59,41 @@ function openPlans(data, hz) {
     .sort((a, b) => b.time - a.time);
 }
 
+/** True while the market regime holds back swing and medium buys (Bear or high volatility). */
+function paused(data) {
+  const r = data.market && data.market.regime;
+  return r === 'bear' || r === 'volatile';
+}
+
+/** Why swing and medium buys are paused, the engine's own reasons, and when they come back. */
+function pausedNote(data, hz) {
+  if (!paused(data)) return null;
+  const r = data.market.regime, reasons = (data.market.reasons || []).slice(0, 3);
+  return h('div', { class: 'pause-note', role: 'note' },
+    h('p', { class: 'pause-title' }, (r === 'bear' ? '🐻 ' : '🌪️ ') + t('scan.paused.' + r)),
+    h('p', null, t('scan.pausedWhy', { hz: t('hz.' + hz).toLowerCase() })),
+    reasons.length ? h('ul', { class: 'bullets' }, reasons.map((x) => h('li', null, x))) : null,
+    h('p', { class: 'faint' }, t('scan.pausedBack.' + r)));
+}
+
+/** Setups of this horizon the market filter held back (paper only), newest first. */
+function heldPlans(data, hz) {
+  return (data.held || []).filter((a) => a.horizon === hz).map((a) => ({ ...a, status: 'held' }));
+}
+
 function planSection(data, hz) {
-  const list = openPlans(data, hz);
-  return h('section', { class: 'sec', style: { marginTop: '8px' } },
+  const list = openPlans(data, hz), held = heldPlans(data, hz), stop = paused(data);
+  const plans = h('section', { class: 'sec', style: { marginTop: '8px' } },
+    pausedNote(data, hz),
     h('h2', { class: 'sec-title' }, t('scan.plans'), list.length ? h('span', { class: 'sec-count' }, String(list.length)) : null),
     list.length
       ? [h('ul', { class: 'list' }, list.map((a) => alertRow(a, openAlert))), h('p', { class: 'note faint', style: { marginTop: '6px' } }, t('scan.plansNote'))]
-      : h('p', { class: 'muted' }, t('scan.plansNone.' + hz)));
+      : h('p', { class: 'muted' }, stop ? t('scan.plansPaused', { hz: t('hz.' + hz).toLowerCase() }) : t('scan.plansNone.' + hz)));
+  if (!held.length && !stop) return plans;
+  return h('div', null, plans, h('section', { class: 'sec', style: { marginTop: '22px' } },
+    h('h2', { class: 'sec-title' }, t('scan.held'), held.length ? h('span', { class: 'sec-count' }, String(held.length)) : null),
+    h('p', { class: 'sec-note' }, t('scan.heldNote')),
+    held.length ? h('ul', { class: 'list' }, held.map((a) => alertRow(a, openAlert))) : h('p', { class: 'muted' }, t('scan.heldNone'))));
 }
 
 /** A stock's page. horizon: the Scan tab it was opened from, so that horizon's alerts come first. */
@@ -149,7 +177,7 @@ function stockBody(data, symbol, sc, horizon) {
           [t('fund.pledge'), f.pledge != null ? fmt.pct(f.pledge, 1, false) : '—'],
         ]),
         h('p', { class: 'note' }, t('fund.note'))) : null,
-      alertsBlock(pastAlerts, horizon),
+      alertsBlock(pastAlerts, horizon, data, symbol),
       h('h3', null, t('stock.news')),
       news,
       aiBlock(data, symbol),
@@ -157,10 +185,14 @@ function stockBody(data, symbol, sc, horizon) {
   };
 }
 
-/** Alerts on this stock: the horizon of the Scan tab first, the others under their own heading. */
-function alertsBlock(list, horizon) {
+/**
+ * Alerts on this stock: the horizon of the Scan tab first, the others under their own heading, then any setups
+ * on it that the market filter held back (paper only).
+ */
+function alertsBlock(list, horizon, data, symbol) {
   const sorted = [...list].sort((a, b) => b.time - a.time);
   const rows = (xs) => h('ul', { class: 'list' }, xs.map((a) => alertRow(a, openAlert)));
+  const heldHere = (data.held || []).filter((a) => a.symbol === symbol).map((a) => ({ ...a, status: 'held' }));
   if (!horizon || horizon === 'long') {
     return h('div', null, h('h3', null, t('stock.pastAlerts')), sorted.length ? rows(sorted) : h('p', { class: 'muted' }, t('stock.noAlerts')));
   }
@@ -168,7 +200,8 @@ function alertsBlock(list, horizon) {
   const hz = t('hz.' + horizon);
   return h('div', null,
     h('h3', null, t('stock.alertsFor', { hz })),
-    mine.length ? rows(mine) : h('p', { class: 'muted' }, t('stock.noAlertsFor', { hz: hz.toLowerCase() })),
+    mine.length ? rows(mine) : h('p', { class: 'muted' }, paused(data) ? t('stock.noAlertsPaused', { hz: hz.toLowerCase() }) : t('stock.noAlertsFor', { hz: hz.toLowerCase() })),
+    heldHere.length ? [h('h3', null, t('stock.heldFor')), rows(heldHere)] : null,
     others.length ? h('h3', null, t('stock.alertsOther')) : null,
     others.length ? rows(others) : null);
 }
