@@ -158,7 +158,7 @@ var AppApi = {
         .map(function (r) { return r.outcome === 'TARGET_HIT' ? 'W' : r.outcome === 'STOP_HIT' ? 'L' : 'X'; }).join('').slice(-30);
       return {
         id: st.id, name: st.name, horizon: self.lower(st.horizon), status: self.statusKey(b.status), enabled: b.enabled !== false,
-        override: b.override || '', trades: mine.length, days: m.days, outcomes: outcomes, win: m.winRatePct, avg: m.expectancyPct, pf: m.profitFactor,
+        override: b.override || '', trades: mine.length, days: j.whole.days, outcomes: outcomes, win: m.winRatePct, avg: m.expectancyPct, pf: m.profitFactor,
         vsNifty: m.avgAlphaPct, paperDd: m.maxDrawdownPct === null ? null : -m.maxDrawdownPct, backtest: self.backtestOf(st.id, bt),
         verdict: j.g.reason, quiet: AlertBook.quietByBacktest(st.id, b),
       };

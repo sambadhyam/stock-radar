@@ -447,7 +447,7 @@ var Review = {
       o.trades = m.trades; o.wins = m.wins; o.losses = m.losses; o.flats = m.flats; o.winRatePct = b(m.winRatePct);
       o.avgNetPct = b(m.expectancyPct); o.expectancyPct = b(m.expectancyPct); o.profitFactor = b(m.profitFactor);
       o.maxDrawdownPct = b(m.maxDrawdownPct); o.alphaPct = b(m.avgAlphaPct); o.avgWinPct = b(m.avgWinPct); o.avgLossPct = b(m.avgLossPct);
-      o.avgHoldDays = b(m.avgHoldDays); o.openTrades = open[o.id] || 0; o.updatedAt = now; o.tradeDays = m.days;
+      o.avgHoldDays = b(m.avgHoldDays); o.openTrades = open[o.id] || 0; o.updatedAt = now; o.tradeDays = j.whole.days;
       o.note = g.status === String(o.status).toUpperCase() ? g.reason : 'Next weekly review: ' + g.status.replace('_', '-') + '. ' + g.reason;
     });
     Tables.writeCols(t, ['trades', 'wins', 'losses', 'flats', 'winRatePct', 'avgNetPct', 'expectancyPct', 'profitFactor', 'maxDrawdownPct', 'alphaPct', 'avgWinPct', 'avgLossPct', 'avgHoldDays', 'openTrades', 'updatedAt', 'note', 'tradeDays'], 0);
@@ -513,7 +513,9 @@ var Review = {
   statusName: function (s) { return { PAPER: 'Paper', LIVE_READY: 'Live-ready', REJECTED: 'Rejected' }[s] || s; },
 
   /** One strategy as two short lines for Telegram. */
-  strategyLines: function (st, m, g, current) {
+  /** Two lines per strategy: status, whole-record trades and days against the Live-ready needs, then the latest window's numbers. */
+  strategyLines: function (st, m, g, current, whole) {
+    var w = whole || m;
     var bits = [];
     if (m.trades) {
       bits.push('win ' + m.winRatePct + '%');
@@ -523,8 +525,9 @@ var Review = {
       if (m.avgAlphaPct !== null) bits.push('vs Nifty ' + Fmt.pct(m.avgAlphaPct));
     }
     var icon = current === 'LIVE_READY' ? '✅' : current === 'REJECTED' ? '⛔' : '🧪', rules = this.rules();
-    return [icon + ' <b>' + Notify.esc(st.name) + '</b> · ' + this.statusName(current) + ' · ' + m.trades + '/' + rules.minTrades + ' trades' + (rules.minDays ? ', ' + m.days + '/' + rules.minDays + ' days' : ''),
-      '   ' + (bits.length ? bits.join(' · ') : 'no closed paper trades yet')];
+    var latest = w.trades > m.trades ? 'latest ' + m.trades + ': ' : '';
+    return [icon + ' <b>' + Notify.esc(st.name) + '</b> · ' + this.statusName(current) + ' · ' + w.trades + '/' + rules.minTrades + ' trades' + (rules.minDays ? ', ' + w.days + '/' + rules.minDays + ' days' : ''),
+      '   ' + (bits.length ? latest + bits.join(' · ') : 'no closed paper trades yet')];
   },
 
   /**
@@ -548,8 +551,8 @@ var Review = {
     L.push('', '<b>Strategies</b> (closed paper trades / ' + rules.minTrades + ' needed' + (rules.minDays ? ', on ' + rules.minDays + '+ different days' : '') + ')');
     var book = StrategyBook.load();
     SRCore.STRATEGIES.forEach(function (st) {
-      var m = SRCore.metrics(self.window(trades.filter(function (x) { return x.strategy === st.id && x.track === 'main'; })), { capital: cap });
-      L = L.concat(self.strategyLines(st, m, null, book[st.id] ? book[st.id].status : 'PAPER'));
+      var j = self.judge(st.id, trades, self.rules(), cap);
+      L = L.concat(self.strategyLines(st, j.m, null, book[st.id] ? book[st.id].status : 'PAPER', j.whole));
     });
     if (changes.length) {
       L.push('', '<b>Status changes this week</b>');
@@ -639,13 +642,13 @@ var Review = {
     var groups = { LIVE_READY: [], PAPER: [], REJECTED: [], MORE: [] };
     SRCore.STRATEGIES.forEach(function (st) {
       var j = self.judge(st.id, trades, rules, cap), m = j.m, g = j.g;
-      var key = g.status === 'PAPER' && (m.trades < rules.minTrades || m.days < rules.minDays) ? 'MORE' : g.status;
-      groups[key].push({ st: st, m: m, g: g });
+      var key = g.status === 'PAPER' && (m.trades < rules.minTrades || j.whole.days < rules.minDays) ? 'MORE' : g.status;
+      groups[key].push({ st: st, m: m, g: g, whole: j.whole });
     });
     var show = function (title, list) {
       if (!list.length) return;
       L.push('<b>' + title + '</b>');
-      list.forEach(function (x) { L = L.concat(self.strategyLines(x.st, x.m, x.g, x.g.status)); L.push('   ' + Notify.esc(x.g.reason)); });
+      list.forEach(function (x) { L = L.concat(self.strategyLines(x.st, x.m, x.g, x.g.status, x.whole)); L.push('   ' + Notify.esc(x.g.reason)); });
       L.push('');
     };
     show('Live-ready', groups.LIVE_READY);

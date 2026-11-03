@@ -16,7 +16,7 @@
 var SRCore = (function () {
   'use strict';
 
-  var VERSION = '0.6.3';
+  var VERSION = '0.6.4';
   var OPEN_MIN = 555;   // 09:15 IST in minutes after midnight
   var CLOSE_MIN = 930;  // 15:30 IST
   var ALL_REGIMES = ['BULL', 'NEUTRAL', 'BEAR', 'HIGH_VOL'];
@@ -1126,7 +1126,8 @@ var SRCore = (function () {
    * m: metrics of the trades it is judged on (the latest ones); whole: metrics of its whole paper record (for the
    * luck test; m when left out).
    * rules: {minTrades, minDays, minPF, maxDrawdownPct, minT, btVerdict}
-   *   Both decisions need at least minTrades closed trades, spread over at least minDays different trading days.
+   *   Both decisions need at least minTrades closed trades, and a whole record spread over at least minDays different
+   *   trading days (counted on the whole record: a strategy making 20 trades a day has only 3 days in its latest 60).
    *   LIVE_READY: average net result above zero after charges, profit factor at least minPF, drawdown within
    *               the limit, beating Nifty 50 over the same holding periods (average alpha above zero), a whole
    *               record that luck is unlikely to explain (tStat at least minT), and no 'loses' verdict from the
@@ -1135,12 +1136,12 @@ var SRCore = (function () {
    *   REJECTED:   an average net result below zero.
    */
   function graduate(m, rules, whole) {
-    var need = rules.minTrades, needDays = rules.minDays || 0, days = m && num(m.days) ? m.days : 0;
+    var need = rules.minTrades, needDays = rules.minDays || 0, wd = whole || m, days = wd && num(wd.days) ? wd.days : 0;
     if (!m || !(m.trades >= need)) {
       return { status: 'PAPER', reason: 'Needs more data: ' + (m ? m.trades : 0) + ' of ' + need + ' closed paper trades' + (needDays ? ', on ' + days + ' of ' + needDays + ' different days' : '') + '.' };
     }
     if (days < needDays) {
-      return { status: 'PAPER', reason: 'Needs more days: ' + m.trades + ' trades, but on only ' + days + ' of ' + needDays + ' different trading days. Trades on the same day tend to win or lose together.' };
+      return { status: 'PAPER', reason: 'Needs more days: ' + wd.trades + ' trades, but on only ' + days + ' of ' + needDays + ' different trading days. Trades on the same day tend to win or lose together.' };
     }
     if (m.expectancyPct < 0) return { status: 'REJECTED', reason: 'Loses ' + Math.abs(m.expectancyPct).toFixed(2) + '% per trade on average after charges, over ' + m.trades + ' trades' + (num(m.days) ? ' on ' + m.days + ' days' : '') + '.' };
     var pfOk = m.profitFactor === null ? (m.losses === 0 && m.wins > 0) : m.profitFactor >= rules.minPF;

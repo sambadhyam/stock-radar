@@ -1134,6 +1134,19 @@ test('graduation: 30 trades on only a few days are not enough, however good they
   eq(G.StrategyBook.load().orb.status, 'PAPER', 'not rejected on four days');
 });
 
+test('graduation: a busy strategy counts its days over its whole record, not just its latest 60 trades', () => {
+  const { G, sim, w } = marketWorld();
+  G.AlertBook.ensureHeaders();
+  // 20 trades a day for 16 days: the latest 60 trades fall on only 3 days, the whole record on 16.
+  G.Store.append('Alerts', Array.from({ length: 320 }, (_, i) => closedRow(i, i % 3 === 0 ? -0.5 : 1.2, Math.floor(i / 20))));
+  G.MarketCal._now = at('2026-10-31T10:30:00+05:30');
+  const before = w.telegram.length;
+  G.weeklyReport();
+  const msgs = w.telegram.slice(before).join('\n');
+  ok(/Opening-range breakout is now LIVE-READY/.test(msgs), msgs);
+  ok(/Opening-range breakout<\/b> · [^\n]*320\/30 trades, 16\/15 days/.test(msgs) && /latest 60: win/.test(msgs), msgs);
+});
+
 test('graduation: 30 good paper trades make a strategy Live-ready; a bad run demotes it, with a message each time', () => {
   const { G, sim, w } = marketWorld();
   G.AlertBook.ensureHeaders();

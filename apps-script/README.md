@@ -349,6 +349,19 @@ That's all. The schedule keeps running, and the backtest starts by itself after 
 3. Reload the sheet and run **Stock Radar → 1. Create sheets** (adds the two new settings to Config).
 4. In the app, Settings shows "Connected to the engine (version 0.6.8)" at the bottom.
 
+## Update 0.6.9: busy strategies can reach Live-ready
+
+- **Fix:** the 15 different trading days a strategy needs before Live-ready are now counted over its whole paper record. Before, they were counted in its latest 60 trades, so a strategy making about 20 trades a day (EMA 9/21 cross) only ever had 3 days and could never qualify. The latest 60 trades still decide whether it is performing well now.
+- The weekly report shows each strategy's whole record (for example "212/30 trades, 9/15 days") and labels the numbers below as its latest 60 trades.
+
+1. Paste four files (open each link, **Ctrl+A**, **Ctrl+C**; in Apps Script click in the matching file, **Ctrl+A**, **Ctrl+V**), then **Ctrl+S** once. Best after the closing summary has arrived, or before 09:00:
+   [Api.gs](https://raw.githubusercontent.com/sambadhyam/stock-radar/main/apps-script/Api.gs) → `Api`,
+   [Core.gs](https://raw.githubusercontent.com/sambadhyam/stock-radar/main/apps-script/Core.gs) → `Core`,
+   [Data.gs](https://raw.githubusercontent.com/sambadhyam/stock-radar/main/apps-script/Data.gs) → `Data`,
+   [Review.gs](https://raw.githubusercontent.com/sambadhyam/stock-radar/main/apps-script/Review.gs) → `Review`.
+2. Publish the web app again: **Deploy → Manage deployments → ✏️ → Version: New version → Deploy**.
+3. In the app, Settings shows "Connected to the engine (version 0.6.9)" at the bottom.
+
 ## Backtests
 
 The engine replays history through exactly the rules of the live paper record (same strategy code, fills, exits and Zerodha charges) and sends a **🧪 Backtest Baseline** report to Telegram and email. The numbers also go into the **Backtests** sheet, the **Reports** list and the app (More → Backtest lab, and each strategy card in Results).
